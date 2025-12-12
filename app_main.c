@@ -12,17 +12,6 @@ static Timer g_timer_iwdg = {0};
 static void APP_MAIN_Callback_Iwdg(void)
 {
     BSP_IWDG_Refresh();
-
-//      uint8_t txbuf[10]={1,2,3,4,5,6,7,8,9,0};
-//      BSP_UART_Transmit(BSP_UART3,txbuf,10);
-//      for(int i=40;i<80;i++)
-//      {
-//      APP_MEMORY_Write_U32(i*4,i);
-//      }
-//      for(int i=40;i<80;i++)
-//      {
-//      APP_MEMORY_Write_U16(i*2,i);
-//      }
 }
 
 static void APP_MAIN_Tmr_Init(void)
@@ -48,7 +37,6 @@ void APP_MAIN_Init(void)
     APP_VERSION_Print();
     APP_USER_Init();//建立1 APP_USER_button_Loop  建立2 Modbus_Send_ReadCmd
     APP_DWIN_Init();//建立APP_DWIN_SUB_Display_Handle
-//  APP_RTU_AT_Init();
 }
 /**
   * @brief  主循环
@@ -76,7 +64,6 @@ void APP_MAIN_Handle(void)
         APP_DTU_Handle();
         Modbus_Rec_Handle();  // Modbus接收处理
         APP_DWIN_Rec_Handle();//迪文屏接收消息处理
-//        APP_USER_Rx_Handle();
         /* add app handle end */
 
         /* add log handle*/
@@ -90,4 +77,3 @@ void APP_MAIN_Handle(void)
 }
 
 /*****END OF FILE****/
-
