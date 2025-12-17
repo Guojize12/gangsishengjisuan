@@ -9,8 +9,12 @@ extern "C" {
 #include "app_config.h"
 
 // FLASH存储地址定义
+#if 0
+// 旧的FLASH存储地址定义
 
-#define     FLASHID_nouse                   (2*30) //dtu ip 
+#else
+
+#define     FLASHID                   (2*30) //dtu ip 
 #define     FLASH_POS_TOP_DATA        (2*32)  /*位置量程下限-8000   2020-03-22*/
 #define     FLASH_POS_BUT_DATA        (2*34)  /*位置信号下限-8002   2020-03-22*/
 #define     FLASH_SIG_TOP_DATA        (2*36)  /*位置量程上限-8004   2020-03-22*/
@@ -54,37 +58,19 @@ extern "C" {
 #define     FLASH_KALMAN_CONFIG_PROCESS_NOISE_SCALE       (2*106)  /*卡尔曼配置过程噪声尺度   2025-01-XX*/
 #define     FLASH_KALMAN_CONFIG_MEASUREMENT_NOISE_SCALE       (2*108)  /*卡尔曼配置测量噪声尺度   2025-01-XX*/
 #define     FLASH_KALMAN_CONFIG_WARMUP_SAMPLE_COUNT       (2*110)  /*卡尔曼配置预热样本数   2025-01-XX*/
-#define     FLASH_KALMAN_CONFIG_CHECKSUM       (2*112)  /*卡尔曼配置校验和   2025-01-XX*/
+#define     FLASH_KALMAN_CONFIG_CHECKSUM        (2*112)  /*卡尔曼配置校验和   2025-01-XX*/
 
-#define     FLASH_MEAN_DEVIATION_THRESHOLD       (2*116)  /*均值偏差阈值   2025-01-XX*/
-#define     FLASH_SENSOR_DEVIATION_THRESHOLD       (2*118)  /*单个传感器异常检测阈值   2025-01-XX*/
-#define     FLASH_VARIANCE_THRESHOLD       (2*120)  /*方差异常检测阈值   2025-01-XX*/
-#define     FLASH_TREND_THRESHOLD       (2*122)  /*趋势异常检测阈值   2025-01-XX*/
-#define     FLASH_DEFECT_SCORE_THRESHOLD       (2*124)  /*缺陷得分阈值   2025-01-XX*/
+#define     FLASH_MEAN_DEVIATION_THRESHOLD      (2*116)  /*均值偏差阈值   2025-01-XX*/
+#define     FLASH_SENSOR_DEVIATION_THRESHOLD    (2*118)  /*单个传感器异常检测阈值   2025-01-XX*/
+#define     FLASH_VARIANCE_THRESHOLD            (2*120)  /*方差异常检测阈值   2025-01-XX*/
+#define     FLASH_TREND_THRESHOLD               (2*122)  /*趋势异常检测阈值   2025-01-XX*/
+#define     FLASH_DEFECT_SCORE_THRESHOLD        (2*124)  /*缺陷得分阈值   2025-01-XX*/
 
 #define     APP_IAP_ADDR_STATUS_OTA                (2*126)  /*OTA升级标志位   2025-01-XX*/
+// OTA标志值定义
+#define     OTA_FLAG_MAGIC_NUMBER         1  /*OTA升级魔术数，Bootloader检测到此值则进入升级模式*/
 
-//app中设置的ota
-// EEPROM_FLASH_WriteU32(FLASH_OTA_FLAG, OTA_FLAG_MAGIC_NUMBER);
-//OTA_START
-#define		FLASH_MODEL	  		      	(2*128)	//产品型号位置
-#define		FLASH_REMOTE	  		   	(2*130)	//连接服务器:SN,MODEL,VER位置  3X4B
-#define		FLASH_OTA_MODEL	  		 	(2*132)	//OTA型号位置
-
-#define     FLASHID           			  (2*134)   //dtu ip 
-#define     FLASH_DTU_IP              	  (2*136)   //dtu ip 
-#define     WORK_ID                		  (2*138)
-#define     APP_IAP_ADDR_RESET            (2*140)
-#define     APP_IAP_ADDR_LOG              (2*142)
-#define   	APP_IAP_ADDR_OTA_BASE         (2*144)
-
-#define APP_IAP_ADDR_WRITE_BACK			  (APP_IAP_ADDR_OTA_BASE+2)			 //回写次数  		2*150
-#define APP_IAP_ADDR_APP_OK				  (APP_IAP_ADDR_OTA_BASE+4)			 //APP成功运行记录	2*152
-										  
-#define APP_IAP_ADDR_APP_SIZE  			  (APP_IAP_ADDR_OTA_BASE+10)      //升级固件 大小		2*158
-#define APP_IAP_ADDR_APP_MD5  			  (APP_IAP_ADDR_OTA_BASE+14)      //升级固件 MD5		2*162
-#define APP_IAP_ADDR_APP_VERSION  		  (APP_IAP_ADDR_OTA_BASE+30)  	  //升级 版本号			2*178
-										  
+#endif
 
 typedef struct
 {
@@ -103,11 +89,11 @@ typedef struct
 #define DATA_BUF_LEN 50
 
 
+void loadini(void);
 void APP_DTU_Remote_Head_Init(void);
-
+extern void ADC128S052_CS_DISABLE(void);
+extern void ADC128S052_CS_ENABLE(void);
 extern char uart4_buf[500];
-// #define APP_4G_UART          BSP_UART3
-//#define   APP_4G_UART_BUF          g_uart_buf[APP_4G_UART]
 
 //定义结构体数组，数组元素为报警时间，报警位置，报警类型
 typedef struct
@@ -123,16 +109,79 @@ typedef struct
 #define LED_toggle()           HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_8)
 
 void APP_USER_Init(void);
+void APP_USER_ADC_Loop(void);
 void APP_USER_Rx_Handle(void);
+void Modbus_Rec_Handle(void);  // Modbus接收处理函数
 
+// 位置数据处理函数
+void Modbus_Process_Position_Data(uint32_t position);
+
+// 位置数据获取函数
+uint32_t Modbus_Get_Current_Position(void);
+uint32_t Modbus_Get_Last_Position(void);
+uint32_t Modbus_Get_Position_Change_Count(void);
+int32_t Modbus_Get_Position_Diff(void);
+uint32_t Modbus_Get_Max_Position(void);
+uint32_t Modbus_Get_Min_Position(void);
+uint8_t Modbus_Is_Position_Initialized(void);
+void Modbus_Reset_Position_Change_Count(void);
+void Modbus_Reset_Position_Initialized(void);
 
 void APP_USER_Ip_Set(void);
-void APP_USER_Id_Get(void);
 
 
+// 位置标定相关函数
+
+uint8_t APP_USER_Is_Position_Calibrated(void);
+float APP_USER_Get_Relative_Position(void);
+void APP_USER_Set_Zero_Point(uint32_t zero_point);
+void detect_alarm(uint16_t data_filt[8][50]);  // 更新为新的滑动窗口长度
+
+// 总里程相关函数
+uint32_t APP_USER_Get_Total_Meters(void);
+void APP_USER_Reset_Total_Meters(void);
+void    APP_USER_Process_Device_Data(void);
+
+// 新增：每路通道极值统计函数
+uint16_t APP_USER_Get_Channel_Max_Value(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Min_Value(uint8_t channel);
+void APP_USER_Reset_Channel_Extremes(void);
+void APP_USER_Get_All_Channel_Stats(void);
+
+// 新增：每路通道宽度统计函数
+uint16_t APP_USER_Get_Channel_Current_Width(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Max_Width(uint8_t channel);
+uint32_t APP_USER_Get_Channel_Width_Update_Count(uint8_t channel);
+
+// 新增：钢丝绳探伤结果获取函数
+uint16_t APP_USER_Get_Channel_Positive_Magnitude(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Negative_Magnitude(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Fluctuation_Width(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Baseline_Value(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Peak_Positive(uint8_t channel);
+uint16_t APP_USER_Get_Channel_Peak_Negative(uint8_t channel);
+uint8_t APP_USER_Get_Channel_Anomaly_Detected(uint8_t channel);
+uint8_t APP_USER_Get_Current_Alarm_Level(void);
+
+// 新增：探伤统计信息获取函数
+void APP_USER_Get_All_Channel_Damage_Stats(void);
+
+// 传感器断开检测相关函数和定义
+#define SENSOR_FIX_VALUE_DWIN  2048   // DWIN屏传感器断开时的固定输出值
+uint8_t APP_USER_Is_Sensor_Disconnected(void);  // 获取传感器断开状态
+void APP_USER_Fix_Sensor_Data_For_DWIN(uint16_t data[4]);  // 修正DWIN传感器数据
+
+// DWIN屏专用显示数据（全局变量）
+extern uint16_t g_dwin_display_data[4];  // DWIN屏曲线显示专用数据
+
+/******** 新增：绝对值编码器参数与保存接口（仅声明，不影响DWIN） ********/
+/* 每圈计数与计算周期/系数配置（默认值由app_user.c内部初始化） */
+#define ENCODER_COUNTS_PER_REV 4096  /* 编码器每圈计数 */
+
+void APP_USER_Mileage_Flash_Save_Handle(void); /* 里程保存策略：步进+定时 */
+void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value); /* 关键参数写Flash包裹，预留冗余校验位置 */
 
 #ifdef __cplusplus
 }
 #endif
 #endif  /* __APP_USER_H */
-
