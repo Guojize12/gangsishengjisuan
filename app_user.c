@@ -1,6 +1,6 @@
 #include "app_config.h"
 #include "app_user.h"
-#include <string.h>
+
 
 #include "app_dtu.h" // 用于GSS_device_alarm_stat和上报
 extern uint8_t flash_save_enable;
@@ -157,6 +157,65 @@ static void APP_USER_Fix_Disconnected_Sensor_Data(uint16_t data[4])
     {
         data[i] = SENSOR_FIX_VALUE;
     }
+}
+
+// ========== 新增：同步更新 + 斜率截距重算 ==========
+void APP_USER_Recompute_Slope_Offset(void)
+{
+    float aucy1 = (float)GSS_device.position_range_upper; // 位置量程上限（米）
+    float aucy2 = (float)GSS_device.position_range_lower; // 位置量程下限（米）
+    uint32_t aucx1 = GSS_device.position_signal_upper;    // 位置信号上限（计数）
+    uint32_t aucx2 = GSS_device.position_signal_lower;    // 位置信号下限（计数）
+
+    if (aucx1 != aucx2)
+    {
+        // slope = (upper - lower) / (sig_upper - sig_lower)
+        GSS_device.position_slope  = (aucy1 - aucy2) / (float)(aucx1 - aucx2);
+        // offset = upper - slope * sig_upper
+        GSS_device.position_offset = aucy1 - GSS_device.position_slope * (float)aucx1;
+    }
+    else
+    {
+        // 防呆：信号上下限相同，给出安全值
+        GSS_device.position_slope  = 0.0f;
+        GSS_device.position_offset = aucy2; // 退化为常量，显示下限
+    }
+}
+
+void APP_USER_Set_Position_Upper_By_Current(uint32_t range_upper)
+{
+    // 同步保存位置量程上限（米）
+    GSS_device.position_range_upper = range_upper;
+    EEPROM_FLASH_WriteU32(FLASH_POS_TOP_DATA, GSS_device.position_range_upper);
+
+    // 同步保存当前编码器计数为位置信号上限
+    GSS_device.position_signal_upper = g_current_position;
+    EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper);
+
+    // 强制使用线性标定
+    alarm_button_or_dwin = 1;
+    EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
+
+    // 重算斜率/截距
+    APP_USER_Recompute_Slope_Offset();
+}
+
+void APP_USER_Set_Position_Lower_By_Current(uint32_t range_lower)
+{
+    // 同步保存位置量程下限（米）
+    GSS_device.position_range_lower = range_lower;
+    EEPROM_FLASH_WriteU32(FLASH_POS_BUT_DATA, GSS_device.position_range_lower);
+
+    // 同步保存当前编码器计数为位置信号下限
+    GSS_device.position_signal_lower = g_current_position;
+    EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower);
+
+    // 强制使用线性标定
+    alarm_button_or_dwin = 1;
+    EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
+
+    // 重算斜率/截距
+    APP_USER_Recompute_Slope_Offset();
 }
 
 // 采集一次数据后立即检测
@@ -390,7 +449,8 @@ void loadini(void)
         EEPROM_FLASH_WriteU16(FLASH_THRESHOLD_2, GSS_device.Threshold_set2);
         GSS_device.Threshold_set3 = 9;
         EEPROM_FLASH_WriteU16(FLASH_THRESHOLD_3, GSS_device.Threshold_set3);
-        alarm_button_or_dwin = 0;//按钮标定为0，DWIN标定为1
+        // 默认改为DWIN线性标定模式
+        alarm_button_or_dwin = 1;//按钮标定为0，DWIN标定为1
         EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
         for (int i = 0; i < 5; i++)
         {
@@ -425,29 +485,17 @@ void loadini(void)
         EEPROM_FLASH_WriteU16(FLASH_SAVE_ENABLE, (uint16_t)(flash_save_enable));
 
     }
-    // ===== 智能标定初始化逻辑（保持原有流程，不改DWIN）=====
+
+    // 统一重算斜率/截距（不再依赖模式判断）
+    APP_USER_Recompute_Slope_Offset();
+
+    // 保留零点写入逻辑，但位置换算不再使用零点（线性模式覆盖）
     if (alarm_button_or_dwin == 0)
     {
         // 按钮标定模式下，零点已从FLASH读取，无需额外处理
     }
     else if (alarm_button_or_dwin == 1)
     {
-        float aucy1 = (float)GSS_device.position_range_upper; // 位置量程上限
-        float aucy2 = (float)GSS_device.position_range_lower; // 位置量程下限
-        uint32_t aucx1 =  GSS_device.position_signal_upper;  // 位置信号上限
-        uint32_t aucx2 = GSS_device.position_signal_lower;  // 位置信号下限
-
-        if (aucx1 != aucx2)
-        {
-            GSS_device.position_slope = (aucy1 - aucy2) / (aucx1 - aucx2);
-            GSS_device.position_offset = aucy1 - GSS_device.position_slope * aucx1;
-        }
-        else
-        {
-            GSS_device.position_slope = 0.0f;
-            GSS_device.position_offset = 0.0f;
-            alarm_button_or_dwin = 0;
-        }
         uint32_t range_zero_point = GSS_device.position_range_lower;
 
         if (GSS_device.position_zero_point == 0)
@@ -466,7 +514,7 @@ void loadini(void)
     }
     else
     {
-        alarm_button_or_dwin = 0;
+        alarm_button_or_dwin = 1; // 兜底：强制使用线性法
         EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
     }
 
@@ -491,8 +539,9 @@ void APP_USER_button_Loop()
         {
             GSS_device.position_zero_point = g_current_position;
             EEPROM_FLASH_WriteU32(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
-            alarm_button_or_dwin = 0;//按钮标定为0，DWIN标定为1
-            EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);                   //初始值
+            // 不再切换模式，位置计算统一走线性法
+            // alarm_button_or_dwin = 0;
+            // EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
         }
         g_button_press_flag = 0;
     }
@@ -662,29 +711,11 @@ void APP_USER_Reset_Total_Meters(void)
     // 日志位置预留：总里程清零
 }
 
-// 获取相对于零点的位置（智能标定模式判断）
+// 获取相对于零点的位置（旧接口，保留但不再用于最终显示）
 float  APP_USER_Get_Relative_Position(void)
 {
-    // 情况1：按钮标定模式（alarm_button_or_dwin = 0）
-    if (alarm_button_or_dwin == 0)
-    {
-        // 相对位置（米）= (当前计数-零点计数)/每圈计数 × 圈长系数
-        return ((int32_t)g_current_position - (int32_t)GSS_device.position_zero_point)
-               * (g_position_scale_m_per_rev / (float)ENCODER_COUNTS_PER_REV);
-     }
-    // 情况2：DWIN标定模式（alarm_button_or_dwin = 1）
-    else if (alarm_button_or_dwin == 1)
-    {
-        // 保持原有线性映射，不改动DWIN流程
-        return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset) ;
-    }
-    // 情况3：未知模式或异常情况
-    else
-    {
-        alarm_button_or_dwin = 0;
-        return ((int32_t)g_current_position - (int32_t)GSS_device.position_zero_point)
-               * (g_position_scale_m_per_rev / (float)ENCODER_COUNTS_PER_REV);
-    }
+    // 统一返回线性转换结果（第二种方法）
+    return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
 }
 
 // 手动设置标定零点（用于外部设置）
@@ -751,9 +782,9 @@ void APP_USER_Process_Device_Data(void)
     GSS_device.hall_v[2] = ((float)GSS_device.hall_ad[2] * 3300.0f) / 4095.0f;
     GSS_device.hall_v[3] = ((float)GSS_device.hall_ad[3] * 3300.0f) / 4095.0f;
 
-    // 3. 位置数据处理（相对位置按新增系数计算；DWIN模式不改）
-    GSS_device.position_data_real = (float)APP_USER_Get_Relative_Position() ;
+    // 3. 位置数据处理（强制线性法：第二种方法）
     GSS_device.position_data_ad = g_current_position; // 编码器当前计数
+    GSS_device.position_data_real = (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
 
     // 4. 实时速度计算（统一用200ms周期与系数）
     int32_t abs_position_diff = (position_diff < 0) ? -position_diff : position_diff;

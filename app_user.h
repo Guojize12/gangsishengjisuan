@@ -15,10 +15,10 @@ extern "C" {
 #else
 
 #define     FLASHID                   (2*30) //dtu ip 
-#define     FLASH_POS_TOP_DATA        (2*32)  /*位置量程下限-8000   2020-03-22*/
-#define     FLASH_POS_BUT_DATA        (2*34)  /*位置信号下限-8002   2020-03-22*/
-#define     FLASH_SIG_TOP_DATA        (2*36)  /*位置量程上限-8004   2020-03-22*/
-#define     FLASH_SIG_BUT_DATA        (2*38)  /*位置信号上限-8006   2020-03-22*/
+#define     FLASH_POS_TOP_DATA        (2*32)  /*位置量程上限*/
+#define     FLASH_POS_BUT_DATA        (2*34)  /*位置量程下限*/
+#define     FLASH_SIG_TOP_DATA        (2*36)  /*位置信号上限（对应当前位置计数）*/
+#define     FLASH_SIG_BUT_DATA        (2*38)  /*位置信号下限（对应当前位置计数）*/
 
 #define     FLASH_POSITION_ZERO_POINT   (2*40)  /*位置标定零点-8010   2025-01-XX*/
 #define     FLASH_TOTAL_METERS          (2*42)  /*总里程累计值-8014   2025-01-XX*/
@@ -79,15 +79,12 @@ typedef struct
 
 } bsp_dat_def;
 
-
-
 // Modbus RTU UART1 定义
 #define APP_MODBUS_UART          BSP_UART1
 #define APP_MODBUS_UART_BUF   g_uart_buf[APP_MODBUS_UART]
 
 #define CHANNEL_NUM 8
 #define DATA_BUF_LEN 50
-
 
 void loadini(void);
 void APP_DTU_Remote_Head_Init(void);
@@ -103,7 +100,6 @@ typedef struct
     char type;  //报警类型只有 0 1 2，0表示无损伤，1表示轻微损伤，2表示严重损伤
     uint16_t positive_magnitude; //报警的幅度positive_magnitude
 } AlarmInfo;
-
 
 #define LED1_toggle()          HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_9)
 #define LED_toggle()           HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_8)
@@ -129,13 +125,16 @@ void Modbus_Reset_Position_Initialized(void);
 
 void APP_USER_Ip_Set(void);
 
-
 // 位置标定相关函数
-
 uint8_t APP_USER_Is_Position_Calibrated(void);
 float APP_USER_Get_Relative_Position(void);
 void APP_USER_Set_Zero_Point(uint32_t zero_point);
 void detect_alarm(uint16_t data_filt[8][50]);  // 更新为新的滑动窗口长度
+
+// 同步更新 + 线性标定接口（新增）
+void APP_USER_Set_Position_Upper_By_Current(uint32_t range_upper);
+void APP_USER_Set_Position_Lower_By_Current(uint32_t range_lower);
+void APP_USER_Recompute_Slope_Offset(void);
 
 // 总里程相关函数
 uint32_t APP_USER_Get_Total_Meters(void);
