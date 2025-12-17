@@ -173,10 +173,7 @@ void APP_USER_Fix_Sensor_Data_For_DWIN(uint16_t data[4]);  // 修正DWIN传感�
 // DWIN屏专用显示数据（全局变量）
 extern uint16_t g_dwin_display_data[4];  // DWIN屏曲线显示专用数据
 
-/******** 新增：绝对值编码器参数与保存接口（仅声明，不影响DWIN） ********/
-/* 每圈计数与计算周期/系数配置（默认值由app_user.c内部初始化） */
-#define ENCODER_COUNTS_PER_REV 4096  /* 编码器每圈计数 */
-
+/******** 仅保留与线性换算相关的接口 ********/
 void APP_USER_Mileage_Flash_Save_Handle(void); /* 里程保存策略：步进+定时 */
 void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value); /* 关键参数写Flash包裹，预留冗余校验位置 */
 

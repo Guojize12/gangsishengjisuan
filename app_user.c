@@ -19,10 +19,9 @@ static uint32_t g_position_change_count = 0; // 位置变化次数
 static float g_postion = 0.0f;          // 上次高度值（旧逻辑，已不用于累计里程）
 static uint32_t g_total_meters = 0;         // 总里程累计值（毫米）
 
-/******** 新增：绝对值编码器的统一周期与系数（仅用于计算，不改DWIN） ********/
+/******** 采样周期与限幅（线性法专用） ********/
 static float g_sample_period_s = 0.2f;        // 采样与计算统一周期（秒）：200ms
-static float g_position_scale_m_per_rev = 0.3f;  // 每圈对应的米数系数（默认0.3米/圈）
-static float g_encoder_max_step_m = 3.0f;        // 单步位移最大允许值（米），用于跳变保护
+static float g_encoder_max_step_m = 3.0f;     // 单步位移最大允许值（米），用于跳变保护
 static uint32_t g_mileage_save_step_m = 10;      // 里程写入步进阈值（米）
 static uint32_t g_mileage_save_interval_ms = 60*60*1000; // 里程写入定时间隔（毫秒）：1小时
 static uint32_t s_last_save_meters = 0;         // 上次写入的整米值
@@ -587,7 +586,7 @@ void Modbus_Process_Position_Data(uint32_t position)
     g_last_position = g_current_position;
     g_current_position = position;
 
-    // 始终计算位置差值，无论位置是否变化
+    // 始终计算位置差值，无论位置是否变化（单位：AD计数）
     position_diff = (int32_t)g_current_position - (int32_t)g_last_position;
 
     // 检查位置变化（仅用于计数）
@@ -596,9 +595,10 @@ void Modbus_Process_Position_Data(uint32_t position)
         g_position_change_count++;
     }
 
-    // 计算本次位移（米）：|Δ计数| / 每圈计数 × 圈长系数
-    int32_t abs_diff = (position_diff < 0) ? -position_diff : position_diff;
-    float delta_m = ((float)abs_diff / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
+    // 线性法：计算本次位移（米） = |ΔAD| × |slope|
+    int32_t abs_diff_ad = (position_diff < 0) ? -position_diff : position_diff;
+    float slope_abs = (GSS_device.position_slope >= 0.0f) ? GSS_device.position_slope : -GSS_device.position_slope;
+    float delta_m = (float)abs_diff_ad * slope_abs;
 
     // 单步跳变保护：超过设定阈值则不累计
     if (delta_m > g_encoder_max_step_m)
@@ -610,8 +610,8 @@ void Modbus_Process_Position_Data(uint32_t position)
     // 累计总里程（内部以毫米为单位）
     g_total_meters += (uint32_t)(delta_m * 1000.0f);
 
-    // 记录最大/最小位置（米）用于显示
-    float current_position_m = ((float)g_current_position / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
+    // 记录最大/最小位置（米）用于显示（线性法）
+    float current_position_m = GSS_device.position_slope * (float)g_current_position + GSS_device.position_offset;
     if (current_position_m > g_max_position) g_max_position = current_position_m;
     if (g_min_position == 0 || current_position_m < g_min_position) g_min_position = current_position_m;
 
@@ -786,16 +786,16 @@ void APP_USER_Process_Device_Data(void)
     GSS_device.position_data_ad = g_current_position; // 编码器当前计数
     GSS_device.position_data_real = (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
 
-    // 4. 实时速度计算（统一用200ms周期与系数）
-    int32_t abs_position_diff = (position_diff < 0) ? -position_diff : position_diff;
-    GSS_device.real_speed = ((float)abs_position_diff / (float)ENCODER_COUNTS_PER_REV)
-                            * g_position_scale_m_per_rev
-                            / g_sample_period_s; // 单位：m/s
+    // 4. 实时速度计算（线性法）
+    int32_t abs_position_diff_ad = (position_diff < 0) ? -position_diff : position_diff;
+    float slope_abs = (GSS_device.position_slope >= 0.0f) ? GSS_device.position_slope : -GSS_device.position_slope;
+    float delta_real_m = (float)abs_position_diff_ad * slope_abs;
+    GSS_device.real_speed = delta_real_m / g_sample_period_s; // 单位：m/s
 
     // 5. 运行方向判断（保持原逻辑）
     static uint8_t stop_count = 0;
     static uint8_t last_direction = 0;  // 记录上次的运行方向
-    uint8_t is_really_stopped = (abs_position_diff <= 10 && GSS_device.real_speed < 0.01f);
+    uint8_t is_really_stopped = (abs_position_diff_ad <= 10 && GSS_device.real_speed < 0.01f);
 
     if (position_diff > 50)
     {
