@@ -25,19 +25,32 @@ static void APP_MAIN_Tmr_Init(void)
   * @param  None.
   * @retval None.
   */
+//void APP_MAIN_Init(void)
+//{
+//    APP_MAIN_Tmr_Init();
+
+//    /* add app init*/
+//    APP_CONFIG_Init();
+//    APP_DTU_Init();//建立1  APP_RTU_AT_Config_Handle 建立2 APP_RTU_AT_Config_Handle_Err  //建立3   APP_DTU_Callback回调函数
+
+//    /* add app init end */
+//    APP_VERSION_Print();
+//    APP_USER_Init();//建立1 APP_USER_button_Loop  建立2 Modbus_Send_ReadCmd
+//    APP_DWIN_Init();//建立APP_DWIN_SUB_Display_Handle
+//}
+
+/*修改初始化顺序*/
 void APP_MAIN_Init(void)
 {
-    APP_MAIN_Tmr_Init();
-
-    /* add app init*/
-    APP_CONFIG_Init();
-    APP_DTU_Init();//建立1  APP_RTU_AT_Config_Handle 建立2 APP_RTU_AT_Config_Handle_Err  //建立3   APP_DTU_Callback回调函数
-
-    /* add app init end */
-    APP_VERSION_Print();
-    APP_USER_Init();//建立1 APP_USER_button_Loop  建立2 Modbus_Send_ReadCmd
-    APP_DWIN_Init();//建立APP_DWIN_SUB_Display_Handle
+  APP_CONFIG_Init();
+	APP_USER_Init();//建立1 APP_USER_button_Loop  建立2 Modbus_Send_ReadCmd
+	APP_MAIN_Tmr_Init();
+  APP_DTU_Init();//建立1  APP_RTU_AT_Config_Handle 建立2 APP_RTU_AT_Config_Handle_Err  //建立3   APP_DTU_Callback回调函数
+  APP_DWIN_Init();//建立APP_DWIN_SUB_Display_Handle
+	APP_VERSION_Print();
 }
+
+
 /**
   * @brief  主循环
   * @param  None.
