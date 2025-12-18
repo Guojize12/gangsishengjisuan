@@ -1,114 +1,118 @@
-#include "app_user.h"   // 包含 ENCODER_COUNTS_PER_REV、类型定义与外部依赖声明
+#include "app_user.h"   // ENCODER_COUNTS_PER_REV、类型定义
 #include "position.h"
 
-// 精确匹配 BSP 的声明，避免手动 extern 造成不兼容
+// 精确匹配 BSP 的声明
 #include "bsp_crc16.h"
 #include "bsp_gpio.h"
 #include "bsp_uart.h"
 #include "bsp_timer.h"
 
 // 位置数据相关变量
-static uint32_t g_last_position = 0;        // 上次位置值
-uint32_t g_current_position = 0;     // 当前位置值
-static uint32_t g_position_change_count = 0; // 位置变化次数
-static float g_postion = 0.0f;          // 上次高度值（旧逻辑，已不用于累计里程）
-uint32_t g_total_meters = 0;         // 总里程累计值（毫米）
+static uint32_t g_last_position        = 0;
+uint32_t        g_current_position     = 0;
+static uint32_t g_position_change_count= 0;
+static float    g_postion               = 0.0f;
+uint32_t        g_total_meters         = 0;        // 毫米累计
 
 /******** 绝对值编码器的统一周期与系数（仅用于计算，不改DWIN） ********/
-static float g_sample_period_s = 0.2f;        // 采样与计算统一周期（秒）：200ms
-static float g_position_scale_m_per_rev = 0.3f;  // 每圈对应的米数系数（默认0.3米/圈）
-static float g_encoder_max_step_m = 3.0f;        // 单步位移最大允许值（米），用于跳变保护
-static uint32_t g_mileage_save_step_m = 10;      // 里程写入步进阈值（米）
-static uint32_t g_mileage_save_interval_ms = 60*60*1000; // 里程写入定时间隔（毫秒）：1小时
-static uint32_t s_last_save_meters = 0;         // 上次写入的整米值
-static uint32_t s_last_save_tick = 0;           // 上次写入时间戳（毫秒）
+static float    g_sample_period_s         = 0.2f;    // 200ms
+static float    g_position_scale_m_per_rev= 0.3f;    // 每圈0.3米
+static float    g_encoder_max_step_m      = 3.0f;    // 跳变保护阈值（米）
+static uint32_t g_mileage_save_step_m     = 10;      // 里程步进保存（米）
+static uint32_t g_mileage_save_interval_ms= 60*60*1000; // 至少每小时保存
+static uint32_t s_last_save_meters        = 0;
+static uint32_t s_last_save_tick          = 0;
 
-float g_max_position = 0;        // 最大位置值（米，显示用途）
-float g_min_position = 0;        // 最小位置值（米，显示用途）
+float           g_max_position            = 0;
+float           g_min_position            = 0;
 
-int32_t position_diff = 0;          // 初始化为0，避免启动时显示异常值
+int32_t         position_diff             = 0;       // 始终计算位置差
+static float    g_real_speed              = 0.0f;    // 实时速度（m/s）
 
-extern uint8_t alarm_button_or_dwin;
+extern uint16_t alarm_button_or_dwin;
 extern gss_device  GSS_device;
 
 extern uint32_t HAL_GetTick(void);
 extern void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
 // 发送Modbus RTU读取命令
-// 用于读取AMT50S8M10U10-RC0.5绝对值编码器位置
 void Modbus_Send_ReadCmd(void)
 {
     uint8_t cmd[8];
-    uint8_t dev_addr = 0x01;        // AMT50编码器从机地址
-    uint16_t reg_addr = 0x0000;     // 位置寄存器地址（32位位置）
-    uint16_t reg_num = 0x0002;      // 读取2个寄存器（32位）
+    uint8_t  dev_addr = 0x01;        // 从机地址
+    uint16_t reg_addr = 0x0000;      // 位置寄存器地址（32位）
+    uint16_t reg_num  = 0x0002;      // 读取2个寄存器
 
-    // 构建Modbus RTU帧
-    cmd[0] = dev_addr;                  // 从机地址
-    cmd[1] = 0x03;                      // 功能码：读保持寄存器
-    cmd[2] = (reg_addr >> 8) & 0xFF;    // 寄存器地址高字节
-    cmd[3] = reg_addr & 0xFF;           // 寄存器地址低字节
-    cmd[4] = (reg_num >> 8) & 0xFF;     // 寄存器数量高字节
-    cmd[5] = (reg_num & 0xFF);            // 寄存器数量低字节
+    cmd[0] = dev_addr;
+    cmd[1] = 0x03;
+    cmd[2] = (reg_addr >> 8) & 0xFF;
+    cmd[3] = (reg_addr     ) & 0xFF;
+    cmd[4] = (reg_num  >> 8) & 0xFF;
+    cmd[5] = (reg_num      ) & 0xFF;
 
-    // 计算CRC16校验
     uint16_t crc = bsp_crc16(cmd, 6);
-    cmd[6] = (crc >> 8) & 0xFF;                 // CRC低字节
-    cmd[7] = crc & 0xFF;                       // CRC高字节
+    cmd[6] = (crc >> 8) & 0xFF;
+    cmd[7] = (crc     ) & 0xFF;
 
-    // 发送数据
-    BSP_GPIO_Set(0XB5, 1);              // RS485发送模式
+    BSP_GPIO_Set(0xB5, 1);              // RS485发送模式
     BSP_UART_Transmit(APP_MODBUS_UART, cmd, 8);
-    BSP_GPIO_Set(0XB5, 0);              // RS485接收模式
-
-    // 【重要】已移除在此处累计总里程的旧逻辑，改为在接收并解析位置后处理
-    // 原逻辑依赖于旧的g_postion变量，容易与接收解析时序不一致。
+    BSP_GPIO_Set(0xB5, 0);              // RS485接收模式
 }
 
 extern uint32_t stop_time;
-// 位置数据处理函数（新：在此进行里程累计与跳变保护）
+
+// 接收并处理位置数据（里程累计、速度计算、跳变保护）
 void Modbus_Process_Position_Data(uint32_t position)
 {
-    // 更新位置数据
-    g_last_position = g_current_position;
-    g_current_position = position;
+    // 更新位置
+    g_last_position     = g_current_position;
+    g_current_position  = position;
 
-    // 始终计算位置差值，无论位置是否变化
+    // 位置差
     position_diff = (int32_t)g_current_position - (int32_t)g_last_position;
 
-    // 检查位置变化（仅用于计数）
+    // 变化计数
     if (g_current_position != g_last_position)
     {
         g_position_change_count++;
     }
 
-    // 计算本次位移（米）：|Δ计数| / 每圈计数 × 圈长系数
+    // 本次位移（米）
     int32_t abs_diff = (position_diff < 0) ? -position_diff : position_diff;
-    float delta_m = ((float)abs_diff / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
+    float   delta_m  = ((float)abs_diff / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
 
-    // 单步跳变保护：超过设定阈值则不累计
+    // 单步跳变保护
     if (delta_m > g_encoder_max_step_m)
     {
-        // 日志位置预留：单步跳变过大，本次位移未计入里程
+        // 本次位移未计入里程，速度也按跳变忽略
         return;
     }
 
-    // 累计总里程（内部以毫米为单位）
+    // 累计总里程（转换为毫米）
     g_total_meters += (uint32_t)(delta_m * 1000.0f);
 
-    // 记录最大/最小位置（米）用于显示
+    // 记录最大/最小位置（米）
     float current_position_m = ((float)g_current_position / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
     if (current_position_m > g_max_position) g_max_position = current_position_m;
     if (g_min_position == 0 || current_position_m < g_min_position) g_min_position = current_position_m;
 
-    // 同步对外显示的总里程（米）
+    // 同步显示用总里程（米）
     GSS_device.Total_meters = g_total_meters / 1000;
 
-    // 触发里程保存策略（步进+定时）
+    // 实时速度（m/s）= delta_m / 采样周期
+    g_real_speed = delta_m / g_sample_period_s;
+
+    // 里程保存策略
     APP_USER_Mileage_Flash_Save_Handle();
 }
 
-// Modbus接收处理函数
+// 获取实时速度
+float APP_USER_Get_Real_Speed(void)
+{
+    return g_real_speed;
+}
+
+// Modbus接收处理
 void Modbus_Rec_Handle(void)
 {
     if (BSP_UART_Rec_Read(APP_MODBUS_UART) == USR_EOK)
@@ -117,6 +121,7 @@ void Modbus_Rec_Handle(void)
         {
             uint8_t *rx_data = APP_MODBUS_UART_BUF.rxBuf;
             uint16_t rx_len  = APP_MODBUS_UART_BUF.rxLen;
+
             if (rx_data[0] == 0x01)
             {
                 if (rx_data[1] == 0x03)
@@ -130,18 +135,18 @@ void Modbus_Rec_Handle(void)
                         if (calc_crc == recv_crc)
                         {
                             uint32_t position = (rx_data[3] << 24) | (rx_data[4] << 16) |
-                                                (rx_data[5] << 8) | rx_data[6];
+                                                (rx_data[5] << 8)  |  rx_data[6];
                             Modbus_Process_Position_Data(position);
                         }
                         else
                         {
-                            // 日志位置预留：CRC错误
+                            // CRC错误
                         }
                     }
                 }
-                else if (rx_data[1] == 0x83) // 错误响应
+                else if (rx_data[1] == 0x83) // 异常响应
                 {
-                    // 日志位置预留：Modbus异常响应
+                    // 异常处理
                 }
             }
         }
@@ -178,7 +183,7 @@ void Modbus_Reset_Position_Change_Count(void)
     g_position_change_count = 0;
 }
 
-// 获取总里程（毫米）- 内部存储仍以毫米为单位
+// 获取总里程（毫米）
 uint32_t APP_USER_Get_Total_Meters(void)
 {
     return g_total_meters;
@@ -188,31 +193,23 @@ uint32_t APP_USER_Get_Total_Meters(void)
 void APP_USER_Reset_Total_Meters(void)
 {
     g_total_meters = 0;
-    g_postion = 0.0f;
+    g_postion      = 0.0f;
 
-    // 保存到FLASH（关键参数写入走包裹接口）
     FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, 0);
-
-    // 日志位置预留：总里程清零
 }
 
-// 获取相对于零点的位置（智能标定模式判断）
-float  APP_USER_Get_Relative_Position(void)
+// 相对位置（米）
+float APP_USER_Get_Relative_Position(void)
 {
-    // 情况1：按钮标定模式（alarm_button_or_dwin = 0）
     if (alarm_button_or_dwin == 0)
     {
-        // 相对位置（米）= (当前计数-零点计数)/每圈计数 × 圈长系数
         return ((int32_t)g_current_position - (int32_t)GSS_device.position_zero_point)
                * (g_position_scale_m_per_rev / (float)ENCODER_COUNTS_PER_REV);
-     }
-    // 情况2：DWIN标定模式（alarm_button_or_dwin = 1）
+    }
     else if (alarm_button_or_dwin == 1)
     {
-        // 保持原有线性映射，不改动DWIN流程
-        return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset) ;
+        return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
     }
-    // 情况3：未知模式或异常情况
     else
     {
         alarm_button_or_dwin = 0;
@@ -221,43 +218,30 @@ float  APP_USER_Get_Relative_Position(void)
     }
 }
 
-// 手动设置标定零点（用于外部设置）
+// 设置标定零点
 void APP_USER_Set_Zero_Point(uint32_t zero_point)
 {
     GSS_device.position_zero_point = zero_point;
-
-    // 保存到FLASH（关键参数写入走包裹接口）
     FLASH_WriteU32_WithCheck(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
 }
 
-/******** 关键参数写入包裹与里程保存策略 ********/
-/**
- * @brief  关键参数写入包裹函数（预留冗余校验位置）
- * @param  addr: Flash地址
- * @param  value: 要写入的数值
- * @note   未来可在此增加镜像地址写入、CRC校验、版本号等冗余机制
- */
+/******** 关键参数写入与里程保存策略 ********/
 void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value)
 {
     (void)EEPROM_FLASH_WriteU32(addr, value);
 }
 
-/**
- * @brief  里程保存策略处理（步进+定时）
- * @note   条件1：总里程每增加≥10米写一次Flash；
- *         条件2：若总里程变化不大，则至少每1小时写一次。
- */
 void APP_USER_Mileage_Flash_Save_Handle(void)
 {
-    uint32_t now = HAL_GetTick();
-    uint32_t meters_now = g_total_meters / 1000; // 转为整米比较
+    uint32_t now        = HAL_GetTick();
+    uint32_t meters_now = g_total_meters / 1000; // 转整米比较
 
     // 步进触发
     if ((meters_now - s_last_save_meters) >= g_mileage_save_step_m)
     {
         FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
         s_last_save_meters = meters_now;
-        s_last_save_tick = now;
+        s_last_save_tick   = now;
         return;
     }
 
@@ -266,7 +250,7 @@ void APP_USER_Mileage_Flash_Save_Handle(void)
     {
         FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
         s_last_save_meters = meters_now;
-        s_last_save_tick = now;
+        s_last_save_tick   = now;
         return;
     }
 }
