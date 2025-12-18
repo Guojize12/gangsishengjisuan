@@ -5,6 +5,10 @@
 extern "C" {
 #endif
 
+/* 提前提供 AlarmInfo 的前置声明，确保在下方 include 的头文件（如 app_config.h -> app_dwin_sub.h）
+   使用 extern AlarmInfo alarm_info[3]; 时类型已知 */
+typedef struct AlarmInfo AlarmInfo;
+
 #include "bsp_config.h"
 #include "app_config.h"
 
@@ -96,14 +100,16 @@ extern void ADC128S052_CS_ENABLE(void);
 extern char uart4_buf[500];
 
 //定义结构体数组，数组元素为报警时间，报警位置，报警类型
-typedef struct
+struct AlarmInfo
 {
     char time[64];
     float position;//报警位置对应的时报警时对应的GSS_device_alarm_stat.position_data
     char type;  //报警类型只有 0 1 2，0表示无损伤，1表示轻微损伤，2表示严重损伤
     uint16_t positive_magnitude; //报警的幅度positive_magnitude
-} AlarmInfo;
+};
 
+// 确保外部可用到该全局（params_init.c 等）
+extern uint8_t alarm_button_or_dwin;
 
 #define LED1_toggle()          HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_9)
 #define LED_toggle()           HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_8)

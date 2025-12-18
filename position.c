@@ -1,6 +1,12 @@
 #include "app_user.h"   // 包含 ENCODER_COUNTS_PER_REV、类型定义与外部依赖声明
 #include "position.h"
 
+// 精确匹配 BSP 的声明，避免手动 extern 造成不兼容
+#include "bsp_crc16.h"
+#include "bsp_gpio.h"
+#include "bsp_uart.h"
+#include "bsp_timer.h"
+
 // 位置数据相关变量
 static uint32_t g_last_position = 0;        // 上次位置值
 uint32_t g_current_position = 0;     // 当前位置值
@@ -26,16 +32,6 @@ extern uint8_t alarm_button_or_dwin;
 extern gss_device  GSS_device;
 
 extern uint32_t HAL_GetTick(void);
-extern uint16_t bsp_crc16(const uint8_t* data, uint16_t len);
-
-extern void BSP_GPIO_Set(uint16_t pin, uint8_t val);
-extern void BSP_UART_Transmit(uint8_t uart, uint8_t *buf, uint16_t len);
-extern usr_err_t BSP_UART_Rec_Read(uint8_t uart);
-
-extern uart_buf_def g_uart_buf[];
-extern Timer* BSP_TIMER_Init(Timer* t, void (*cb)(void), uint32_t reload, uint32_t start);
-extern void BSP_TIMER_Start(Timer* t);
-
 extern void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
 // 发送Modbus RTU读取命令
