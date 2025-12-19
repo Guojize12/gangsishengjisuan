@@ -2,8 +2,8 @@
 #define __APP_KALMAN_H__
 
 #include "app_config.h"
-#include <stdbool.h>
 #include <stdint.h>
+
 // ===== 新增：全局通道波动信息结构体 =====
 typedef struct
 {
@@ -37,14 +37,13 @@ typedef struct
 } channel_fluctuation_t;
 
 // 对外可见的全局数组
-
-extern gss_device_alarm_stat GSS_device_alarm_stat  ;      // 显式初始化为0
-extern gss_device_alarm_stat GSS_device_alarm_stat_temp ;  // 显式初始化为0
-extern gss_device_alarm_stat GSS_device_alarm_stat_dwin ; // 显式初始化为0
-extern gss_device  GSS_device ;        // 显式初始化为0，确保所有字段初始值正确
+extern gss_device_alarm_stat GSS_device_alarm_stat;       // 显式初始化为0
+extern gss_device_alarm_stat GSS_device_alarm_stat_temp;  // 显式初始化为0
+extern gss_device_alarm_stat GSS_device_alarm_stat_dwin;  // 显式初始化为0
+extern gss_device  GSS_device;                             // 显式初始化为0，确保所有字段初始值正确
 extern uint8_t alarm_light_trig; // 声光报警触发标志
-extern uint8_t alarm_dtu_trig ;
-extern uint8_t alarm_dwin_trig ;
+extern uint8_t alarm_dtu_trig;
+extern uint8_t alarm_dwin_trig;
 
 // 配置参数
 #define SENSOR_COUNT 4
@@ -55,25 +54,15 @@ extern uint8_t alarm_dwin_trig ;
 // 预热阶段配置
 #define WARMUP_SAMPLES 200
 #define CONFIG_FILE_PATH "wire_rope_config.bin"
+// 新增：预热最长时长（5分钟=300000ms）
+#define WARMUP_TIMEOUT_MS 300000U
 
 // 数值稳定性配置
 #define MIN_VARIANCE_THRESHOLD 1
 #define MAX_VARIANCE_THRESHOLD 1000000
 
-
 // 魔数和版本号
 #define CONFIG_MAGIC_NUMBER 0x57524F50  // "WROP"
-
-// 定义int32的范围限制
-// #define INT32_MAX 2147483647
-// #define INT32_MIN (-2147483648)
-
-// 调整阈值，使其更适合实际数据
-//#define MEAN_DEVIATION_THRESHOLD    50.0f    // 从2.5调整到30.0
-//#define SENSOR_DEVIATION_THRESHOLD  20.0f    // 从4.0调整到20.0
-//#define VARIANCE_THRESHOLD          10.0f    // 从4.2调整到10.0
-//#define TREND_THRESHOLD             30.0f    // 从7.5调整到30.0
-//#define DEFECT_SCORE_THRESHOLD      5        // 保持不变
 
 // 卡尔曼滤波器结构体（针对STM32F103优化）
 typedef struct
@@ -99,10 +88,10 @@ typedef struct
 typedef struct
 {
     float baseline_mean[SENSOR_COUNT];      // 改为float
-    float baseline_std[SENSOR_COUNT];        // 改为float
-    float adaptive_threshold[SENSOR_COUNT];  // 改为float
+    float baseline_std[SENSOR_COUNT];       // 改为float
+    float adaptive_threshold[SENSOR_COUNT]; // 改为float
     float process_noise_scale;              // 改为float
-    float measurement_noise_scale;           // 改为float
+    float measurement_noise_scale;          // 改为float
     uint32_t checksum;
 } ConfigParams;
 
@@ -117,6 +106,15 @@ typedef struct
     ConfigParams config_params;
     uint8_t warmup_complete;
     uint32_t warmup_sample_count;
+
+    // 递推统计（新增）
+    float warmup_running_mean[SENSOR_COUNT];
+    float warmup_running_M2[SENSOR_COUNT];
+    uint32_t warmup_running_n[SENSOR_COUNT];
+
+    // 预热时间管理（新增）
+    uint32_t warmup_start_time_ms;
+    uint32_t warmup_timeout_ms;
 
     // 趋势分析相关（减少缓冲区大小）
     float recent_filtered_values[8];  // 改为float
@@ -137,5 +135,8 @@ int warmup_validate_config(void);
 void warmup_init_default_config(void);
 void kalman_system_init(void);
 
-#endif /*__APP_KALMAN_H__ */
+void handle_mode_switch(uint16_t data1[4]);
+void process_warmup_mode(uint16_t data1[4]);
+uint8_t process_detection_mode(uint16_t data1[4]);
 
+#endif /*__APP_KALMAN_H__ */
