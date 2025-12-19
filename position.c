@@ -5,6 +5,7 @@
 #include "bsp_gpio.h"
 #include "bsp_uart.h"
 #include "bsp_timer.h"
+#include "bsp_rtc.h"
 
 #include <math.h>
 
@@ -15,10 +16,10 @@ static uint32_t g_last_position         = 0;
 uint32_t        g_current_position      = 0;
 int32_t         position_diff           = 0;     // 当前帧相对上一帧的AD差值（有符号）
 
-// 采样与速度
-static uint32_t s_last_tick             = 0;     // 上一帧tick
-static float    g_sample_period_s       = 0.2f;  // 默认采样周期兜底（秒）
+// 速度（使用RTC按物理时间计算）
 static float    g_real_speed            = 0.0f;  // 运行速度（m/s，取绝对值）
+static bsp_rtc_def s_last_speed_rtc     = {0};   // 上次用于速度计算的RTC时间
+static uint32_t    s_last_speed_ad      = 0;     // 上次用于速度计算的AD
 
 // 里程（毫米）
 uint32_t        g_total_meters          = 0;     // 累计里程（mm）
@@ -32,7 +33,6 @@ static uint8_t  s_last_direction        = 0;
 extern uint16_t alarm_button_or_dwin;
 extern gss_device  GSS_device;
 
-extern uint32_t HAL_GetTick(void);
 extern void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
 //==================== Modbus - 发送读取命令 ====================
@@ -62,46 +62,70 @@ void Modbus_Send_ReadCmd(void)
 
 //==================== 基础计算核心 ====================
 
+static inline uint32_t RTC_SecOfDay(const bsp_rtc_def* t)
+{
+    return (uint32_t)t->hour * 3600u + (uint32_t)t->minute * 60u + (uint32_t)t->second;
+}
+
 static void Modbus_Process_Position_Data(uint32_t ad_now)
 {
-    // 1) 时间间隔
-    uint32_t now_tick = HAL_GetTick();
-    float dt_s;
-    if (s_last_tick == 0) {
-        dt_s = g_sample_period_s;   // 首帧兜底
-    } else {
-        uint32_t dt_ms = now_tick - s_last_tick;
-        dt_s = dt_ms > 0 ? (dt_ms / 1000.0f) : g_sample_period_s; // 防止0除
-    }
-    s_last_tick = now_tick;
+    // 0) 获取当前RTC时间（用于速度计算的绝对时间基准）
+    bsp_rtc_def now_rtc = {0};
+    BSP_RTC_Get(&now_rtc);
+    uint32_t now_sod = RTC_SecOfDay(&now_rtc);
 
-    // 2) 原始计数更新与差值（有符号）
+    // 1) 原始计数更新与差值（有符号）
     g_last_position    = g_current_position;
     g_current_position = ad_now;
     position_diff      = (int32_t)g_current_position - (int32_t)g_last_position;
 
-    // 3) 实时位置（米，支持正负）
+    // 2) 实时位置（米，支持正负）
     //    公式：pos_m = slope * (AD - zero_point) + offset
     GSS_device.position_data_ad    = g_current_position;
     GSS_device.position_data_real  = (float)GSS_device.position_slope *
                                      ( (int32_t)GSS_device.position_data_ad - (int32_t)GSS_device.position_zero_point )
                                      + (float)GSS_device.position_offset;
 
-    // 4) 当前位移（米）
+    // 3) 当前位移（米）
     //    用标定的 slope 将AD差值转米；里程与速度均按位移的绝对值计（速度为标量）
     float delta_m_signed = (float)position_diff * (float)GSS_device.position_slope;
     float delta_m_abs    = fabsf(delta_m_signed);
 
-    // 5) 速度（m/s）= |Δm| / Δt
-    g_real_speed               = (dt_s > 0.0f) ? (delta_m_abs / dt_s) : 0.0f;
-    GSS_device.real_speed      = g_real_speed;
+    // 4) 速度（m/s）——使用RTC按物理时间计算，每满1秒且AD有变化才更新
+    if ((s_last_speed_rtc.hour | s_last_speed_rtc.minute | s_last_speed_rtc.second) == 0)
+    {
+        // 首次初始化：建立速度计算基准
+        s_last_speed_rtc = now_rtc;
+        s_last_speed_ad  = ad_now;
+        g_real_speed     = 0.0f;
+    }
+    else
+    {
+        uint32_t last_sod = RTC_SecOfDay(&s_last_speed_rtc);
+        // 处理跨午夜：若now比last小，视为加一天
+        uint32_t dt_s = (now_sod >= last_sod) ? (now_sod - last_sod)
+                                              : (now_sod + 86400u - last_sod);
 
-    // 6) 总里程（mm）
+        if ((dt_s >= 1u) && (s_last_speed_ad != ad_now))
+        {
+            int32_t ad_diff_for_speed = (int32_t)ad_now - (int32_t)s_last_speed_ad;
+            float   delta_m_for_speed = fabsf((float)ad_diff_for_speed * (float)GSS_device.position_slope);
+            g_real_speed = delta_m_for_speed / (float)dt_s;
+
+            // 更新速度计算基准
+            s_last_speed_rtc = now_rtc;
+            s_last_speed_ad  = ad_now;
+        }
+        // 未满1秒或AD未变化：保持上一次速度不变
+    }
+    GSS_device.real_speed = g_real_speed;
+
+    // 5) 总里程（mm）
     s_total_distance_m_f      += delta_m_abs;                 // 累计米（浮点）
     g_total_meters             = (uint32_t)(s_total_distance_m_f * 1000.0f); // 转mm整数
     GSS_device.Total_meters    = g_total_meters / 1000;       // 对外显示用“整米”
 
-    // 7) 运行方向（按AD递增递减）
+    // 6) 运行方向（按AD递增递减 + 速度阈值）
     const int32_t DIFF_STOP_THRESH = 2;        // AD微动阈值（可按实际编码器分辨率调整）
     const float   SPEED_STOP_THRESH= 0.005f;   // 速度停止阈值 m/s
 
