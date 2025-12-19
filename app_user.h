@@ -95,6 +95,17 @@ struct AlarmInfo
     uint16_t positive_magnitude;  // 报警幅度
 };
 
+typedef enum 
+{
+    BUTTON_EVENT_NONE = 0,
+    BUTTON_EVENT_PRESSED,
+    BUTTON_EVENT_RELEASED
+} ButtonEvent;
+
+ButtonEvent Button_DetectEvent(void);
+
+
+
 // 统一为 uint16_t
 extern uint16_t alarm_button_or_dwin;
 
@@ -142,6 +153,8 @@ extern uint16_t g_dwin_display_data[4];
 
 void APP_USER_Mileage_Flash_Save_Handle(void);
 void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
+
+
 
 #ifdef __cplusplus
 }

@@ -13,16 +13,13 @@ uint32_t        g_current_position     = 0;
 static uint32_t g_position_change_count= 0;
 static float    g_postion               = 0.0f;
 uint32_t        g_total_meters         = 0;        // 毫米累计
-
-/******** 绝对值编码器的统一周期与系数（仅用于计算，不改DWIN） ********/
 static float    g_sample_period_s         = 0.2f;    // 200ms
-static float    g_position_scale_m_per_rev= 0.3f;    // 每圈0.3米
 static float    g_encoder_max_step_m      = 3.0f;    // 跳变保护阈值（米）
 static uint32_t g_mileage_save_step_m     = 10;      // 里程步进保存（米）
 static uint32_t g_mileage_save_interval_ms= 60*60*1000; // 至少每小时保存
 static uint32_t s_last_save_meters        = 0;
 static uint32_t s_last_save_tick          = 0;
-
+static float    g_position_scale_m_per_rev= 0.3f;    // 每圈0.3米
 float           g_max_position            = 0;
 float           g_min_position            = 0;
 
@@ -79,20 +76,20 @@ void Modbus_Process_Position_Data(uint32_t position)
 
     // 本次位移（米）
     int32_t abs_diff = (position_diff < 0) ? -position_diff : position_diff;
-    float   delta_m  = ((float)abs_diff / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
+		float   delta_m  = (float)abs_diff * GSS_device.position_slope ;
 
-    // 单步跳变保护
-    if (delta_m > g_encoder_max_step_m)
-    {
-        // 本次位移未计入里程，速度也按跳变忽略
-        return;
-    }
+//    // 单步跳变保护
+//    if (delta_m > g_encoder_max_step_m)
+//    {
+//        // 本次位移未计入里程，速度也按跳变忽略
+//        return;
+//    }
 
     // 累计总里程（转换为毫米）
     g_total_meters += (uint32_t)(delta_m * 1000.0f);
 
     // 记录最大/最小位置（米）
-    float current_position_m = ((float)g_current_position / (float)ENCODER_COUNTS_PER_REV) * g_position_scale_m_per_rev;
+    float current_position_m = GSS_device.position_data_real;
     if (current_position_m > g_max_position) g_max_position = current_position_m;
     if (g_min_position == 0 || current_position_m < g_min_position) g_min_position = current_position_m;
 
@@ -201,21 +198,7 @@ void APP_USER_Reset_Total_Meters(void)
 // 相对位置（米）
 float APP_USER_Get_Relative_Position(void)
 {
-    if (alarm_button_or_dwin == 0)
-    {
-        return ((int32_t)g_current_position - (int32_t)GSS_device.position_zero_point)
-               * (g_position_scale_m_per_rev / (float)ENCODER_COUNTS_PER_REV);
-    }
-    else if (alarm_button_or_dwin == 1)
-    {
-        return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
-    }
-    else
-    {
-        alarm_button_or_dwin = 0;
-        return ((int32_t)g_current_position - (int32_t)GSS_device.position_zero_point)
-               * (g_position_scale_m_per_rev / (float)ENCODER_COUNTS_PER_REV);
-    }
+  return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
 }
 
 // 设置标定零点
@@ -252,5 +235,60 @@ void APP_USER_Mileage_Flash_Save_Handle(void)
         s_last_save_meters = meters_now;
         s_last_save_tick   = now;
         return;
+    }
+}
+
+ void APP_USER_UpdateDevicePositionAndSpeed(void)
+{
+    // 相对位置（米）
+    GSS_device.position_data_real = (float)APP_USER_Get_Relative_Position();
+    // 编码器当前计数（AD）
+    GSS_device.position_data_ad = g_current_position;
+    // 实时速度
+    GSS_device.real_speed = APP_USER_Get_Real_Speed();
+}
+
+
+// 4. 运行方向判断与赋值
+ void APP_USER_UpdateRunDirection(void)
+{
+    int32_t abs_position_diff = (position_diff < 0) ? -position_diff : position_diff;
+    static uint8_t stop_count = 0;
+    static uint8_t last_direction = 0;
+    uint8_t is_really_stopped = (abs_position_diff <= 10 && GSS_device.real_speed < 0.01f);
+
+    if (position_diff > 50)
+    {
+        GSS_device.run_direction = 1;  // 向上
+        last_direction = 1;
+        stop_count = 0;
+    }
+    else if (position_diff < -50)
+    {
+        GSS_device.run_direction = 2;  // 向下
+        last_direction = 2;
+        stop_count = 0;
+    }
+    else
+    {
+        if (is_really_stopped)
+        {
+            GSS_device.run_direction = 0;  // 停止
+            last_direction = 0;
+            stop_count = 0;
+        }
+        else
+        {
+            stop_count++;
+            if (stop_count >= 2)
+            {
+                GSS_device.run_direction = 0;  // 停止或微小移动
+                last_direction = 0;
+            }
+            else
+            {
+                GSS_device.run_direction = last_direction;
+            }
+        }
     }
 }

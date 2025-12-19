@@ -31,4 +31,7 @@ float    APP_USER_Get_Real_Speed(void);
 void     APP_USER_Mileage_Flash_Save_Handle(void);
 void     FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
+void     APP_USER_UpdateDevicePositionAndSpeed(void);
+void     APP_USER_UpdateRunDirection(void);
+
 #endif

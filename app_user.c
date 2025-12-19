@@ -35,7 +35,9 @@ uint8_t  alarm_dwin_trig  = 0;
 uint8_t  final_alarm_level = 0;
 uint8_t  last_alarm_level  = 0;
 
-uint16_t alarm_button_or_dwin = 0;  // 统一为 uint16_t
+
+/*取消alarm_button_or_dwin判断所有都为1*/
+uint16_t alarm_button_or_dwin = 1;  // 统一为 uint16_t
 
 AlarmInfo alarm_info[3];// 报警信息
 AlarmInfo alarm_info_max;
@@ -97,69 +99,46 @@ void APP_USER_button_Loop(void);
 /**
  * @brief  采集一次数据后立即检测
  */
-void APP_USER_ADC_Loop(void)
+static void APP_USER_Sample_ADC(void)
 {
     uint32_t t1 = HAL_GetTick();
     unsigned long results = 0;
-
-    for (uint8_t ch = 0; ch < 8; ch++)
-    {
+    for (uint8_t ch = 0; ch < 8; ch++) {
         results = ADS_sum(ch);
         uint8_t idx = (ch + 7) % 8;
-        Value_real[idx].adcValue[V_num] = (uint16_t)results; // V_num当前为0
+        Value_real[idx].adcValue[V_num] = (uint16_t)results;
         BSP_RTC_Get(&Value_real[idx].real_rtc);
     }
     uint32_t t2 = HAL_GetTick();
     (void)t1; (void)t2;
+    data_ready = 1;
+}
 
-    data_ready = 1; // 采集满一轮后，标志置1
-
-    // 启动稳定性检查
+static void APP_USER_Check_Sensor_Disconnect(void)
+{
     if (system_start_time == 0)
-    {
-        system_start_time = HAL_GetTick(); // 记录系统启动时间
-    }
-
-    // 步骤1：传感器断开检测（始终执行）
-    if (data_ready)
-    {
+        system_start_time = HAL_GetTick();
+    if (data_ready) {
         uint16_t data[4];
-        for (int ch = 0; ch < 4; ch++)
-        {
-            data[ch] = (uint16_t)Value_real[ch].adcValue[0];
-        }
-
-        if (APP_USER_Detect_Sensor_Disconnect(data))
-        {
+        for (int ch = 0; ch < 4; ch++) data[ch] = (uint16_t)Value_real[ch].adcValue[0];
+        if (APP_USER_Detect_Sensor_Disconnect(data)) {
             sensor_disconnect_count++;
             sensor_stable_count = 0;
-
-            if (sensor_disconnect_count >= SENSOR_DISCONNECT_DETECT_COUNT)
-            {
-                if (!sensor_is_disconnected)
-                {
+            if (sensor_disconnect_count >= SENSOR_DISCONNECT_DETECT_COUNT) {
+                if (!sensor_is_disconnected) {
                     sensor_is_disconnected = 1;
-                    // 传感器断开日志
+                    // log
                 }
             }
-        }
-        else
-        {
+        } else {
             if (sensor_disconnect_count > 0) sensor_disconnect_count--;
-
-            if (sensor_stable_count < SENSOR_DISPLAY_UNLOCK_THRESHOLD)
-            {
-                sensor_stable_count++;
-            }
-
-            if (sensor_is_disconnected && sensor_disconnect_count == 0)
-            {
+            if (sensor_stable_count < SENSOR_DISPLAY_UNLOCK_THRESHOLD) sensor_stable_count++;
+            if (sensor_is_disconnected && sensor_disconnect_count == 0) {
                 sensor_is_disconnected = 0;
-                // 传感器恢复日志
+                // log
             }
         }
-
-        // 新增：采样完成后，将最新4路AD数据更新到GSS_device（由sensor模块负责电压换算）
+        // 将最新4路AD数据更新到GSS_device
         APP_SENSOR_Update_From_Buffer(
             (uint16_t)Value_real[0].adcValue[0],
             (uint16_t)Value_real[1].adcValue[0],
@@ -167,99 +146,89 @@ void APP_USER_ADC_Loop(void)
             (uint16_t)Value_real[3].adcValue[0]
         );
     }
-
-    // 增加稳定周期计数
     stable_cycle_count++;
+}
 
-    // 检查系统是否已稳定（时间和周期双重条件）
+static void APP_USER_Check_System_Stability(void)
+{
     uint32_t now_ms = HAL_GetTick();
-    if ((!system_stable) && (position_diff != 0))
-    {
+    if ((!system_stable) && (position_diff != 0)) {
         if ((now_ms - system_start_time > STARTUP_STABLE_TIME) &&
-            (stable_cycle_count > STARTUP_STABLE_CYCLES))
-        {
+             (stable_cycle_count > STARTUP_STABLE_CYCLES)) {
             system_stable = 1;
             memset(last_alarm_data, 0, sizeof(last_alarm_data));
             last_alarm_time = now_ms;
         }
     }
+}
 
-    // 步骤2：报警检测（仅在系统稳定后）
-    if (data_ready && system_stable)
-    {
+static void APP_USER_Check_Alarm_Level(void)
+{
+    if (data_ready && system_stable) {
         uint16_t data[4];
-        for (int ch = 0; ch < 4; ch++)
-        {
-            data[ch] = (uint16_t)Value_real[ch].adcValue[0];
-        }
-
-        if (sensor_is_disconnected)
-        {
-            final_alarm_level = 0;  // 传感器断开时不报警
-        }
-        else
-        {
+        for (int ch = 0; ch < 4; ch++) data[ch] = (uint16_t)Value_real[ch].adcValue[0];
+        if (sensor_is_disconnected) {
+            final_alarm_level = 0;
+        } else {
             final_alarm_level = process_kalman(data);
         }
     }
+}
 
-    // 传感器检测完成后，调用统一的数据处理（显示、方向等）
-    APP_USER_Process_Device_Data();
-
-    // 统一记录报警信息
-    if (final_alarm_level > 0)
-    {
+static void APP_USER_Record_Alarm_Info(void)
+{
+    if (final_alarm_level > 0) {
         GSS_device_alarm_stat_temp.alarm = final_alarm_level;
         BSP_RTC_Get(&GSS_device_alarm_stat_temp.alarmtime);
         GSS_device_alarm_stat_temp.position_data_real = GSS_device.position_data_real;
-        GSS_device_alarm_stat_temp.position_data_ad   = GSS_device.position_data_ad;
-        GSS_device_alarm_stat_temp.real_speed         = GSS_device.real_speed;
-        GSS_device_alarm_stat_temp.degree_of_damage   = final_alarm_level;
-
-        for (int i = 0; i < 8; i++)
-        {
+        GSS_device_alarm_stat_temp.position_data_ad = GSS_device.position_data_ad;
+        GSS_device_alarm_stat_temp.real_speed = GSS_device.real_speed;
+        GSS_device_alarm_stat_temp.degree_of_damage = final_alarm_level;
+        for (int i = 0; i < 8; i++) {
             GSS_device_alarm_stat_temp.hall_ad[i] = GSS_device.hall_ad[i];
             GSS_device_alarm_stat_temp.hall_v[i]  = (uint32_t)GSS_device.hall_v[i];
         }
-
-        if ((uint16_t)GSS_device.hall_ad[0] > alarm_info_max.positive_magnitude)
-        {
+        if ((uint16_t)GSS_device.hall_ad[0] > alarm_info_max.positive_magnitude) {
             alarm_info_max.positive_magnitude = (uint16_t)GSS_device.hall_ad[0];
-            alarm_info_max.position = (GSS_device_alarm_stat_temp.position_data_real);
-            alarm_info_max.type     = (char)final_alarm_level;
+            alarm_info_max.position = GSS_device_alarm_stat_temp.position_data_real;
+            alarm_info_max.type = (char)final_alarm_level;
         }
-
         GSS_device_alarm_stat_dwin = GSS_device_alarm_stat_temp;
-        GSS_device_alarm_stat      = GSS_device_alarm_stat_temp;
-
-        if (last_alarm_level == 0)
-        {
-            alarm_light_trig = 1;  // 声光报警只触发一次
-            alarm_dtu_trig   = 1;  // DTU显示只触发一次
-            alarm_dwin_trig  = 1;  // DWIN显示只触发一次
+        GSS_device_alarm_stat = GSS_device_alarm_stat_temp;
+        if (last_alarm_level == 0) {
+            alarm_light_trig = 1;
+            alarm_dtu_trig = 1;
+            alarm_dwin_trig = 1;
         }
     }
-
-    // 更新上一次报警状态
     last_alarm_level = final_alarm_level;
+}
 
+static void APP_USER_Handle_Alarm_Output(void)
+{
     /* 声光报警器 */
-    if (alarm_light_trig == 1)
-    {
+    if (alarm_light_trig == 1) {
         BSP_GPIO_Set(ALARM_LIGHT_PORT, 1); // 开启声光报警
         start_time = HAL_GetTick();
         alarm_light_trig = 0;
-    }
-    else
-    {
+    } else {
         uint32_t current_tick = HAL_GetTick();
         uint32_t elapsed_time = current_tick - start_time;
-
         if (elapsed_time >= 500)
-        {
             BSP_GPIO_Set(ALARM_LIGHT_PORT, 0);
-        }
     }
+}
+
+
+void APP_USER_ADC_Loop(void)
+{
+    APP_USER_Sample_ADC();
+    APP_USER_Check_Sensor_Disconnect();
+    APP_USER_Check_System_Stability();
+    APP_USER_Check_Alarm_Level();
+    APP_USER_Process_Device_Data();
+    APP_USER_Record_Alarm_Info();
+    APP_USER_Handle_Alarm_Output();
 }
 
 /**
@@ -288,17 +257,11 @@ void APP_USER_Init(void)
 /**
  * @brief  统一的设备数据处理（显示与方向等）
  */
-void APP_USER_Process_Device_Data(void)
+
+
+// 2. 显示锁定、解锁状态判断与切换
+static void APP_USER_UpdateDisplayLockState(void)
 {
-    // 相对位置（米）
-    GSS_device.position_data_real = (float)APP_USER_Get_Relative_Position();
-    // 编码器当前计数（AD）
-    GSS_device.position_data_ad = g_current_position;
-
-    // 实时速度由 position 模块维护，统一获取
-    GSS_device.real_speed = APP_USER_Get_Real_Speed();
-
-    // DWIN显示锁定/解锁
     if (sensor_disconnect_count >= SENSOR_DISPLAY_LOCK_THRESHOLD)
     {
         if (!display_is_fixed)
@@ -314,7 +277,11 @@ void APP_USER_Process_Device_Data(void)
             display_is_fixed = 0;
         }
     }
+}
 
+// 3. DWIN显示数据维护
+static void APP_USER_UpdateDwinDisplayData(void)
+{
     if (display_is_fixed)
     {
         wave_counter++;
@@ -335,76 +302,109 @@ void APP_USER_Process_Device_Data(void)
         g_dwin_display_data[2] = (uint16_t)GSS_device.hall_ad[2];
         g_dwin_display_data[3] = (uint16_t)GSS_device.hall_ad[3];
     }
+}
 
-    // 运行方向判断（保持原逻辑）
-    int32_t abs_position_diff = (position_diff < 0) ? -position_diff : position_diff;
-    static uint8_t stop_count = 0;
-    static uint8_t last_direction = 0;  // 记录上次的运行方向
-    uint8_t is_really_stopped = (abs_position_diff <= 10 && GSS_device.real_speed < 0.01f);
-
-    if (position_diff > 50)
-    {
-        GSS_device.run_direction = 1;  // 向上
-        last_direction = 1;
-        stop_count = 0;
-    }
-    else if (position_diff < -50)
-    {
-        GSS_device.run_direction = 2;  // 向下
-        last_direction = 2;
-        stop_count = 0;
-    }
-    else
-    {
-        if (is_really_stopped)
-        {
-            GSS_device.run_direction = 0;  // 停止
-            last_direction = 0;
-            stop_count = 0;
-        }
-        else
-        {
-            stop_count++;
-            if (stop_count >= 2)
-            {
-                GSS_device.run_direction = 0;  // 停止或微小移动
-                last_direction = 0;
-            }
-            else
-            {
-                GSS_device.run_direction = last_direction;
-            }
-        }
-    }
-
-    // 钢丝绳损伤程度与报警状态（保持原逻辑）
+// 5. 钢丝绳报警与损伤赋值
+static void APP_USER_UpdateAlarmState(void)
+{
     GSS_device.degree_of_damage = GSS_device_alarm_stat.alarm;
     GSS_device.alarm            = GSS_device_alarm_stat.alarm;
+}
+
+// 主调度函数
+void APP_USER_Process_Device_Data(void)
+{
+    APP_USER_UpdateDevicePositionAndSpeed();
+    APP_USER_UpdateDisplayLockState();
+    APP_USER_UpdateDwinDisplayData();
+    APP_USER_UpdateRunDirection();
+    APP_USER_UpdateAlarmState();
 }
 
 /**
  * @brief  按钮扫描（用于设置零点）
  */
+//void APP_USER_button_Loop(void)
+//{
+//    current_button_state = BSP_GPIO_Get(0xBC); // PB12 = 0xBC
+//    current_time = HAL_GetTick();
+
+//    if (g_button_last_state == GPIO_PIN_SET && current_button_state == GPIO_PIN_RESET)
+//    {
+//        g_button_press_time = current_time;
+//        g_button_press_flag = 1;
+//    }
+//    else if (g_button_last_state == GPIO_PIN_RESET && current_button_state == GPIO_PIN_SET)
+//    {
+//        if (g_button_press_flag && (current_time - g_button_press_time >= 50)) // 防抖，至少50ms
+//        {
+//            GSS_device.position_zero_point = g_current_position;
+//            EEPROM_FLASH_WriteU32(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
+////            alarm_button_or_dwin = 1; // 按钮标定为0，DWIN标定为1
+////            EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
+//        }
+//        g_button_press_flag = 0;
+//    }
+//    g_button_last_state = current_button_state;
+//}
+
+ButtonEvent Button_DetectEvent(void)
+{
+    static uint8_t last_state = GPIO_PIN_SET;
+    static uint32_t press_time = 0;
+    static uint8_t press_flag = 0;
+
+    uint8_t current_state = BSP_GPIO_Get(0xBC);
+    uint32_t current_time = HAL_GetTick();
+    ButtonEvent event = BUTTON_EVENT_NONE;
+
+    if (last_state == GPIO_PIN_SET && current_state == GPIO_PIN_RESET)
+    {
+        press_time = current_time;
+        press_flag = 1;
+        event = BUTTON_EVENT_PRESSED;
+    }
+    else if (last_state == GPIO_PIN_RESET && current_state == GPIO_PIN_SET)
+    {
+        if (press_flag && (current_time - press_time >= 50)) // 防抖
+        {
+            event = BUTTON_EVENT_RELEASED;
+        }
+        press_flag = 0;
+    }
+    last_state = current_state;
+    return event;
+}
+
 void APP_USER_button_Loop(void)
 {
-    current_button_state = BSP_GPIO_Get(0xBC); // PB12 = 0xBC
-    current_time = HAL_GetTick();
+    static uint8_t button_press_counter = 0; 
 
-    if (g_button_last_state == GPIO_PIN_SET && current_button_state == GPIO_PIN_RESET)
+    ButtonEvent event = Button_DetectEvent();
+    if (event == BUTTON_EVENT_RELEASED)
     {
-        g_button_press_time = current_time;
-        g_button_press_flag = 1;
-    }
-    else if (g_button_last_state == GPIO_PIN_RESET && current_button_state == GPIO_PIN_SET)
-    {
-        if (g_button_press_flag && (current_time - g_button_press_time >= 50)) // 防抖，至少50ms
+        if ((button_press_counter % 2) == 0)
         {
-            GSS_device.position_zero_point = g_current_position;
-            EEPROM_FLASH_WriteU32(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
-            alarm_button_or_dwin = 0; // 按钮标定为0，DWIN标定为1
-            EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
+          // 第一次
+          APP_USER_Set_Zero_Point(g_current_position);
+					GSS_device.position_signal_lower = g_current_position;
+          EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower);//保存位置信号下限
+					mode_switch = 0;
+          EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+          					
         }
-        g_button_press_flag = 0;
+        else
+        {
+          // 第二次
+         GSS_device.position_signal_upper = g_current_position;
+         EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper);//保存位置信号上限	
+         InitSmartCalibration();		
+				 mode_switch = 1;
+         EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);					
+
+        }
+        button_press_counter++;
+        if(button_press_counter >= 2) // 超过1轮归0，实际可更高
+            button_press_counter = 0;
     }
-    g_button_last_state = current_button_state;
 }
