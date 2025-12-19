@@ -102,7 +102,6 @@ static void Modbus_Process_Position_Data(uint32_t ad_now)
     GSS_device.Total_meters    = g_total_meters / 1000;       // 对外显示用“整米”
 
     // 7) 运行方向（按AD递增递减）
-    //    简化：只看position_diff的符号；微动时方向保持上一方向或置0
     const int32_t DIFF_STOP_THRESH = 2;        // AD微动阈值（可按实际编码器分辨率调整）
     const float   SPEED_STOP_THRESH= 0.005f;   // 速度停止阈值 m/s
 
@@ -112,11 +111,9 @@ static void Modbus_Process_Position_Data(uint32_t ad_now)
     } else if (position_diff < -DIFF_STOP_THRESH) {
         new_dir = 2; // 向下
     } else {
-        // AD微动范围内，看速度是否接近0
         if (g_real_speed < SPEED_STOP_THRESH) {
             new_dir = 0; // 停止
         }
-        // 否则保持上一方向（避免抖动）
     }
     s_last_direction = new_dir;
     GSS_device.run_direction = new_dir;
@@ -151,20 +148,20 @@ void Modbus_Rec_Handle(void)
                         }
                         else
                         {
-                            // CRC错误：此处可加统计或日志
+                            // CRC错误
                         }
                     }
                 }
                 else if (rx_data[1] == 0x83)
                 {
-                    // 异常响应：此处可加诊断
+                    // 异常响应
                 }
             }
         }
     }
 }
 
-//==================== 对外接口（保持原函数名） ====================
+//==================== 对外接口 ====================
 
 float APP_USER_Get_Real_Speed(void)
 {
@@ -183,8 +180,6 @@ uint32_t Modbus_Get_Last_Position(void)
 
 uint32_t Modbus_Get_Position_Change_Count(void)
 {
-    // 简化后不再维护变化计数，按需实现；
-    // 若必须返回，可统计“非零差值帧数”，此处返回0占位。
     return 0;
 }
 
@@ -195,7 +190,6 @@ int32_t Modbus_Get_Position_Diff(void)
 
 void Modbus_Reset_Position_Change_Count(void)
 {
-    // 简化：不维护该计数
 }
 
 uint32_t APP_USER_Get_Total_Meters(void)
@@ -218,32 +212,32 @@ float APP_USER_Get_Relative_Position(void)
 }
 
 // 标定零点（写入闪存）
-// 要求：第一次按键时，斜率不变；偏置根据当前AD与零点的差值调整，使“实时位置立刻归0”
+// 第一次按键：斜率不变；将零点设为当前AD，使实时位置立刻归0（offset相应调整）
 void APP_USER_Set_Zero_Point(uint32_t zero_point)
 {
-    // 1) 记录零点并保存
+    // 1) 设置零点并保存
     GSS_device.position_zero_point = zero_point;
     FLASH_WriteU32_WithCheck(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
 
-    // 2) 斜率保持不变，重算偏置，使当前实时位置归零：
-    //    pos = slope*(AD - zero_point) + offset = 0  =>
-    //    offset = -slope*(AD - zero_point)
+    // 2) 让当前实时位置归零：
+    // pos = slope*(AD - zero_point) + offset = 0
+    // 由于此时 AD == zero_point，直接令 offset = 0 更直观（与下面计算等价）
     int32_t ad_diff_now = (int32_t)g_current_position - (int32_t)GSS_device.position_zero_point;
-    GSS_device.position_offset = -(float)GSS_device.position_slope * (float)ad_diff_now;
+    (void)ad_diff_now; // AD应为零
+    GSS_device.position_offset = 0.0f;
 
-    // 3) 立即更新设备的实时位置为0（满足“标0实时位置也要归0”的需求）
+    // 3) 立即更新设备实时位置为0
     GSS_device.position_data_ad   = g_current_position;
     GSS_device.position_data_real = 0.0f;
+	
+   	APP_USER_Reset_Total_Meters();
 }
 
 // 将当前计算结果同步到GSS_device（如需在其它流程调用）
 void APP_USER_UpdateDevicePositionAndSpeed(void)
 {
-    // 实时位置（米）
     GSS_device.position_data_real = APP_USER_Get_Relative_Position();
-    // 计数（AD）
     GSS_device.position_data_ad   = g_current_position;
-    // 速度（m/s）
     GSS_device.real_speed         = APP_USER_Get_Real_Speed();
 }
 
@@ -269,6 +263,8 @@ void APP_USER_UpdateRunDirection(void)
 
 // 智能标定初始化（用两点求斜率与偏置）
 // 斜率允许为负；对上下限AD值无特殊要求（仅避免除零）
+// 与位置公式 pos = slope*(AD - zero_point) + offset 完全一致：
+//   zero_point = x2（下限AD），offset = y2（下限物理值）
 void InitSmartCalibration(void)
 {
     float    y1 = (float)GSS_device.position_range_upper;
@@ -277,8 +273,15 @@ void InitSmartCalibration(void)
     uint32_t x2 = GSS_device.position_signal_lower;
 
     if (x1 != x2) {
-        GSS_device.position_slope  = (y1 - y2) / (float)( (int32_t)x1 - (int32_t)x2 );
-        GSS_device.position_offset = y2 - GSS_device.position_slope * (float)x2;
+        GSS_device.position_slope       = (y1 - y2) / (float)((int32_t)x1 - (int32_t)x2);
+        GSS_device.position_zero_point  = x2;   // 锚定到下限AD
+        FLASH_WriteU32_WithCheck(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
+        GSS_device.position_offset      = y2;   // 与(AD - zero_point)搭配
+
+        // 立即按新标定刷新实时位置
+        GSS_device.position_data_ad   = g_current_position;
+        int32_t ad_diff = (int32_t)GSS_device.position_data_ad - (int32_t)GSS_device.position_zero_point;
+        GSS_device.position_data_real = (float)GSS_device.position_slope * (float)ad_diff + (float)GSS_device.position_offset;
     }
 }
 

@@ -81,6 +81,59 @@ uint32_t alarm_light_start_time = 0;        // 声光报警开始时间
 #define  ALARM_LIGHT_DURATION   200         // 声光报警持续时间
 #define  ALARM_LIGHT_PORT       0xB9        // PB9端口编号
 
+// ========= 按键提示继电器响声（非阻塞，参考声光报警器） =========
+static BeepState g_beep_state    = BEEP_IDLE;
+static uint8_t   g_beep_remain   = 0;           // 剩余鸣叫次数
+static uint32_t  g_beep_last_tick= 0;
+
+#define BEEP_ON_TIME    200    // ms，单次鸣叫时长
+#define BEEP_OFF_TIME   200     // ms，间隔时长
+
+// 启动N次提示鸣叫（非阻塞）
+static inline void Relay_Beep_N_Times(uint8_t n)
+{
+    if (n == 0) return;
+    g_beep_remain    = n;
+    g_beep_state     = BEEP_ON;
+    g_beep_last_tick = HAL_GetTick();
+    BSP_GPIO_Set(ALARM_LIGHT_PORT, 1); // 首声，继电器吸合
+}
+
+// 每次主循环调用，驱动鸣叫状态机
+static inline void Relay_Beep_Task(void)
+{
+    if (g_beep_state == BEEP_IDLE) return;
+
+    uint32_t now = HAL_GetTick();
+    if (g_beep_state == BEEP_ON)
+    {
+        if (now - g_beep_last_tick >= BEEP_ON_TIME)
+        {
+            BSP_GPIO_Set(ALARM_LIGHT_PORT, 0); // 拉低，进入间隔
+            g_beep_state     = BEEP_OFF;
+            g_beep_last_tick = now;
+        }
+    }
+    else if (g_beep_state == BEEP_OFF)
+    {
+        if (now - g_beep_last_tick >= BEEP_OFF_TIME)
+        {
+            if (g_beep_remain > 0) g_beep_remain--;
+            if (g_beep_remain == 0)
+            {
+                g_beep_state = BEEP_IDLE;
+                BSP_GPIO_Set(ALARM_LIGHT_PORT, 0); // 保证最终拉低
+            }
+            else
+            {
+                BSP_GPIO_Set(ALARM_LIGHT_PORT, 1); // 下一声吸合
+                g_beep_state     = BEEP_ON;
+                g_beep_last_tick = now;
+            }
+        }
+    }
+}
+
 char uart4_buf[500];
 
 // 传感器断开检测相关（在 sensor.c/sensor.h）
@@ -229,6 +282,9 @@ void APP_USER_ADC_Loop(void)
     APP_USER_Process_Device_Data();
     APP_USER_Record_Alarm_Info();
     APP_USER_Handle_Alarm_Output();
+
+    // 非阻塞提示鸣叫状态机（放在报警输出之后，避免抢占）
+    Relay_Beep_Task();
 }
 
 /**
@@ -387,24 +443,28 @@ void APP_USER_button_Loop(void)
         {
           // 第一次
           APP_USER_Set_Zero_Point(g_current_position);
-					GSS_device.position_signal_lower = g_current_position;
+          GSS_device.position_signal_lower = g_current_position;
           EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower);//保存位置信号下限
-					mode_switch = 0;
+          mode_switch = 0;
           EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
-          					
+
+          // 按键提示：响一声（100ms），间隔150ms（非阻塞）
+          Relay_Beep_N_Times(1);
         }
         else
         {
           // 第二次
-         GSS_device.position_signal_upper = g_current_position;
-         EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper);//保存位置信号上限	
-         InitSmartCalibration();		
-				 mode_switch = 1;
-         EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);					
+          GSS_device.position_signal_upper = g_current_position;
+          EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper);//保存位置信号上限	
+          InitSmartCalibration();		
+          mode_switch = 1;
+          EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);					
 
+          // 按键提示：响两声（每声100ms，中间150ms，非阻塞）
+          Relay_Beep_N_Times(2);
         }
         button_press_counter++;
-        if(button_press_counter >= 2) // 超过1轮归0，实际可更高
+        if(button_press_counter >= 2) // 超过1轮归0
             button_press_counter = 0;
     }
 }

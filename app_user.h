@@ -73,6 +73,14 @@ typedef struct
     bsp_rtc_def real_rtc;
 } bsp_dat_def;
 
+
+typedef enum 
+{
+    BEEP_IDLE = 0,
+    BEEP_ON,        // 当前声：继电器拉高
+    BEEP_OFF,       // 间隔期：继电器拉低
+} BeepState;
+
 // Modbus RTU UART1 定义
 #define APP_MODBUS_UART        BSP_UART1
 #define APP_MODBUS_UART_BUF    g_uart_buf[APP_MODBUS_UART]
