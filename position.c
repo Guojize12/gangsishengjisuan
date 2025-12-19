@@ -218,10 +218,22 @@ float APP_USER_Get_Relative_Position(void)
 }
 
 // 标定零点（写入闪存）
+// 要求：第一次按键时，斜率不变；偏置根据当前AD与零点的差值调整，使“实时位置立刻归0”
 void APP_USER_Set_Zero_Point(uint32_t zero_point)
 {
+    // 1) 记录零点并保存
     GSS_device.position_zero_point = zero_point;
     FLASH_WriteU32_WithCheck(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
+
+    // 2) 斜率保持不变，重算偏置，使当前实时位置归零：
+    //    pos = slope*(AD - zero_point) + offset = 0  =>
+    //    offset = -slope*(AD - zero_point)
+    int32_t ad_diff_now = (int32_t)g_current_position - (int32_t)GSS_device.position_zero_point;
+    GSS_device.position_offset = -(float)GSS_device.position_slope * (float)ad_diff_now;
+
+    // 3) 立即更新设备的实时位置为0（满足“标0实时位置也要归0”的需求）
+    GSS_device.position_data_ad   = g_current_position;
+    GSS_device.position_data_real = 0.0f;
 }
 
 // 将当前计算结果同步到GSS_device（如需在其它流程调用）
@@ -256,6 +268,7 @@ void APP_USER_UpdateRunDirection(void)
 }
 
 // 智能标定初始化（用两点求斜率与偏置）
+// 斜率允许为负；对上下限AD值无特殊要求（仅避免除零）
 void InitSmartCalibration(void)
 {
     float    y1 = (float)GSS_device.position_range_upper;
@@ -265,7 +278,7 @@ void InitSmartCalibration(void)
 
     if (x1 != x2) {
         GSS_device.position_slope  = (y1 - y2) / (float)( (int32_t)x1 - (int32_t)x2 );
-        GSS_device.position_offset = y1 - GSS_device.position_slope * (float)x1;
+        GSS_device.position_offset = y2 - GSS_device.position_slope * (float)x2;
     }
 }
 
