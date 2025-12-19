@@ -34,4 +34,6 @@ void     FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 void     APP_USER_UpdateDevicePositionAndSpeed(void);
 void     APP_USER_UpdateRunDirection(void);
 
+void     InitSmartCalibration(void);
+
 #endif

@@ -1,44 +1,48 @@
-#include "app_user.h"   // ENCODER_COUNTS_PER_REV、类型定义
+#include "app_user.h"
 #include "position.h"
 
-// 精确匹配 BSP 的声明
 #include "bsp_crc16.h"
 #include "bsp_gpio.h"
 #include "bsp_uart.h"
 #include "bsp_timer.h"
 
-// 位置数据相关变量
-static uint32_t g_last_position        = 0;
-uint32_t        g_current_position     = 0;
-static uint32_t g_position_change_count= 0;
-static float    g_postion               = 0.0f;
-uint32_t        g_total_meters         = 0;        // 毫米累计
-static float    g_sample_period_s         = 0.2f;    // 200ms
-static float    g_encoder_max_step_m      = 3.0f;    // 跳变保护阈值（米）
-static uint32_t g_mileage_save_step_m     = 10;      // 里程步进保存（米）
-static uint32_t g_mileage_save_interval_ms= 60*60*1000; // 至少每小时保存
-static uint32_t s_last_save_meters        = 0;
-static uint32_t s_last_save_tick          = 0;
-static float    g_position_scale_m_per_rev= 0.3f;    // 每圈0.3米
-float           g_max_position            = 0;
-float           g_min_position            = 0;
+#include <math.h>
 
-int32_t         position_diff             = 0;       // 始终计算位置差
-static float    g_real_speed              = 0.0f;    // 实时速度（m/s）
+//==================== 基本状态变量（尽量沿用原有变量名） ====================
 
+// 原始计数（AD）
+static uint32_t g_last_position         = 0;
+uint32_t        g_current_position      = 0;
+int32_t         position_diff           = 0;     // 当前帧相对上一帧的AD差值（有符号）
+
+// 采样与速度
+static uint32_t s_last_tick             = 0;     // 上一帧tick
+static float    g_sample_period_s       = 0.2f;  // 默认采样周期兜底（秒）
+static float    g_real_speed            = 0.0f;  // 运行速度（m/s，取绝对值）
+
+// 里程（毫米）
+uint32_t        g_total_meters          = 0;     // 累计里程（mm）
+static float    s_total_distance_m_f    = 0.0f;  // 浮点里程累计（m），用于避免整数累加精度损失
+
+// 方向
+// 0=停止/未知，1=向上（AD增大），2=向下（AD减小）
+static uint8_t  s_last_direction        = 0;
+
+// 外部引用
 extern uint16_t alarm_button_or_dwin;
 extern gss_device  GSS_device;
 
 extern uint32_t HAL_GetTick(void);
 extern void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
-// 发送Modbus RTU读取命令
+//==================== Modbus - 发送读取命令 ====================
+
 void Modbus_Send_ReadCmd(void)
 {
-    uint8_t cmd[8];
-    uint8_t  dev_addr = 0x01;        // 从机地址
-    uint16_t reg_addr = 0x0000;      // 位置寄存器地址（32位）
-    uint16_t reg_num  = 0x0002;      // 读取2个寄存器
+    uint8_t  cmd[8];
+    uint8_t  dev_addr = 0x01;
+    uint16_t reg_addr = 0x0000;   // 32位位置寄存器（两寄存器）
+    uint16_t reg_num  = 0x0002;
 
     cmd[0] = dev_addr;
     cmd[1] = 0x03;
@@ -48,68 +52,78 @@ void Modbus_Send_ReadCmd(void)
     cmd[5] = (reg_num      ) & 0xFF;
 
     uint16_t crc = bsp_crc16(cmd, 6);
-    cmd[6] = (crc >> 8) & 0xFF;
+    cmd[6] = (crc >> 8) & 0xFF;   // 注意：与BSP约定的CRC大小端一致
     cmd[7] = (crc     ) & 0xFF;
 
-    BSP_GPIO_Set(0xB5, 1);              // RS485发送模式
+    BSP_GPIO_Set(0xB5, 1);        // RS485发送
     BSP_UART_Transmit(APP_MODBUS_UART, cmd, 8);
-    BSP_GPIO_Set(0xB5, 0);              // RS485接收模式
+    BSP_GPIO_Set(0xB5, 0);        // RS485接收
 }
 
-extern uint32_t stop_time;
+//==================== 基础计算核心 ====================
 
-// 接收并处理位置数据（里程累计、速度计算、跳变保护）
-void Modbus_Process_Position_Data(uint32_t position)
+static void Modbus_Process_Position_Data(uint32_t ad_now)
 {
-    // 更新位置
-    g_last_position     = g_current_position;
-    g_current_position  = position;
-
-    // 位置差
-    position_diff = (int32_t)g_current_position - (int32_t)g_last_position;
-
-    // 变化计数
-    if (g_current_position != g_last_position)
-    {
-        g_position_change_count++;
+    // 1) 时间间隔
+    uint32_t now_tick = HAL_GetTick();
+    float dt_s;
+    if (s_last_tick == 0) {
+        dt_s = g_sample_period_s;   // 首帧兜底
+    } else {
+        uint32_t dt_ms = now_tick - s_last_tick;
+        dt_s = dt_ms > 0 ? (dt_ms / 1000.0f) : g_sample_period_s; // 防止0除
     }
+    s_last_tick = now_tick;
 
-    // 本次位移（米）
-    int32_t abs_diff = (position_diff < 0) ? -position_diff : position_diff;
-		float   delta_m  = (float)abs_diff * GSS_device.position_slope ;
+    // 2) 原始计数更新与差值（有符号）
+    g_last_position    = g_current_position;
+    g_current_position = ad_now;
+    position_diff      = (int32_t)g_current_position - (int32_t)g_last_position;
 
-//    // 单步跳变保护
-//    if (delta_m > g_encoder_max_step_m)
-//    {
-//        // 本次位移未计入里程，速度也按跳变忽略
-//        return;
-//    }
+    // 3) 实时位置（米，支持正负）
+    //    公式：pos_m = slope * (AD - zero_point) + offset
+    GSS_device.position_data_ad    = g_current_position;
+    GSS_device.position_data_real  = (float)GSS_device.position_slope *
+                                     ( (int32_t)GSS_device.position_data_ad - (int32_t)GSS_device.position_zero_point )
+                                     + (float)GSS_device.position_offset;
 
-    // 累计总里程（转换为毫米）
-    g_total_meters += (uint32_t)(delta_m * 1000.0f);
+    // 4) 当前位移（米）
+    //    用标定的 slope 将AD差值转米；里程与速度均按位移的绝对值计（速度为标量）
+    float delta_m_signed = (float)position_diff * (float)GSS_device.position_slope;
+    float delta_m_abs    = fabsf(delta_m_signed);
 
-    // 记录最大/最小位置（米）
-    float current_position_m = GSS_device.position_data_real;
-    if (current_position_m > g_max_position) g_max_position = current_position_m;
-    if (g_min_position == 0 || current_position_m < g_min_position) g_min_position = current_position_m;
+    // 5) 速度（m/s）= |Δm| / Δt
+    g_real_speed               = (dt_s > 0.0f) ? (delta_m_abs / dt_s) : 0.0f;
+    GSS_device.real_speed      = g_real_speed;
 
-    // 同步显示用总里程（米）
-    GSS_device.Total_meters = g_total_meters / 1000;
+    // 6) 总里程（mm）
+    s_total_distance_m_f      += delta_m_abs;                 // 累计米（浮点）
+    g_total_meters             = (uint32_t)(s_total_distance_m_f * 1000.0f); // 转mm整数
+    GSS_device.Total_meters    = g_total_meters / 1000;       // 对外显示用“整米”
 
-    // 实时速度（m/s）= delta_m / 采样周期
-    g_real_speed = delta_m / g_sample_period_s;
+    // 7) 运行方向（按AD递增递减）
+    //    简化：只看position_diff的符号；微动时方向保持上一方向或置0
+    const int32_t DIFF_STOP_THRESH = 2;        // AD微动阈值（可按实际编码器分辨率调整）
+    const float   SPEED_STOP_THRESH= 0.005f;   // 速度停止阈值 m/s
 
-    // 里程保存策略
-    APP_USER_Mileage_Flash_Save_Handle();
+    uint8_t new_dir = s_last_direction;
+    if (position_diff > DIFF_STOP_THRESH) {
+        new_dir = 1; // 向上
+    } else if (position_diff < -DIFF_STOP_THRESH) {
+        new_dir = 2; // 向下
+    } else {
+        // AD微动范围内，看速度是否接近0
+        if (g_real_speed < SPEED_STOP_THRESH) {
+            new_dir = 0; // 停止
+        }
+        // 否则保持上一方向（避免抖动）
+    }
+    s_last_direction = new_dir;
+    GSS_device.run_direction = new_dir;
 }
 
-// 获取实时速度
-float APP_USER_Get_Real_Speed(void)
-{
-    return g_real_speed;
-}
+//==================== Modbus接收处理 ====================
 
-// Modbus接收处理
 void Modbus_Rec_Handle(void)
 {
     if (BSP_UART_Rec_Read(APP_MODBUS_UART) == USR_EOK)
@@ -137,158 +151,127 @@ void Modbus_Rec_Handle(void)
                         }
                         else
                         {
-                            // CRC错误
+                            // CRC错误：此处可加统计或日志
                         }
                     }
                 }
-                else if (rx_data[1] == 0x83) // 异常响应
+                else if (rx_data[1] == 0x83)
                 {
-                    // 异常处理
+                    // 异常响应：此处可加诊断
                 }
             }
         }
     }
 }
 
-// 获取当前位置值
+//==================== 对外接口（保持原函数名） ====================
+
+float APP_USER_Get_Real_Speed(void)
+{
+    return g_real_speed;
+}
+
 uint32_t Modbus_Get_Current_Position(void)
 {
     return g_current_position;
 }
 
-// 获取上次位置值
 uint32_t Modbus_Get_Last_Position(void)
 {
     return g_last_position;
 }
 
-// 获取位置变化次数
 uint32_t Modbus_Get_Position_Change_Count(void)
 {
-    return g_position_change_count;
+    // 简化后不再维护变化计数，按需实现；
+    // 若必须返回，可统计“非零差值帧数”，此处返回0占位。
+    return 0;
 }
 
-// 获取位置变化差值
 int32_t Modbus_Get_Position_Diff(void)
 {
-    return (int32_t)g_current_position - (int32_t)g_last_position;
+    return position_diff;
 }
 
-// 重置位置变化计数
 void Modbus_Reset_Position_Change_Count(void)
 {
-    g_position_change_count = 0;
+    // 简化：不维护该计数
 }
 
-// 获取总里程（毫米）
 uint32_t APP_USER_Get_Total_Meters(void)
 {
     return g_total_meters;
 }
 
-// 重置总里程
 void APP_USER_Reset_Total_Meters(void)
 {
-    g_total_meters = 0;
-    g_postion      = 0.0f;
-
+    g_total_meters        = 0;
+    s_total_distance_m_f  = 0.0f;
     FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, 0);
 }
 
-// 相对位置（米）
+// 绝对位置（米，带零点和偏置）
 float APP_USER_Get_Relative_Position(void)
 {
-  return (float)(GSS_device.position_slope * (float)GSS_device.position_data_ad + GSS_device.position_offset);
+    int32_t ad_diff = (int32_t)GSS_device.position_data_ad - (int32_t)GSS_device.position_zero_point;
+    return (float)(GSS_device.position_slope * ad_diff + GSS_device.position_offset);
 }
 
-// 设置标定零点
+// 标定零点（写入闪存）
 void APP_USER_Set_Zero_Point(uint32_t zero_point)
 {
     GSS_device.position_zero_point = zero_point;
     FLASH_WriteU32_WithCheck(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
 }
 
-/******** 关键参数写入与里程保存策略 ********/
+// 将当前计算结果同步到GSS_device（如需在其它流程调用）
+void APP_USER_UpdateDevicePositionAndSpeed(void)
+{
+    // 实时位置（米）
+    GSS_device.position_data_real = APP_USER_Get_Relative_Position();
+    // 计数（AD）
+    GSS_device.position_data_ad   = g_current_position;
+    // 速度（m/s）
+    GSS_device.real_speed         = APP_USER_Get_Real_Speed();
+}
+
+// 独立的方向更新（若需要周期调用）
+void APP_USER_UpdateRunDirection(void)
+{
+    const int32_t DIFF_STOP_THRESH = 2;
+    const float   SPEED_STOP_THRESH= 0.005f;
+
+    uint8_t new_dir = s_last_direction;
+    if (position_diff > DIFF_STOP_THRESH) {
+        new_dir = 1;
+    } else if (position_diff < -DIFF_STOP_THRESH) {
+        new_dir = 2;
+    } else {
+        if (g_real_speed < SPEED_STOP_THRESH) {
+            new_dir = 0;
+        }
+    }
+    s_last_direction = new_dir;
+    GSS_device.run_direction = new_dir;
+}
+
+// 智能标定初始化（用两点求斜率与偏置）
+void InitSmartCalibration(void)
+{
+    float    y1 = (float)GSS_device.position_range_upper;
+    float    y2 = (float)GSS_device.position_range_lower;
+    uint32_t x1 = GSS_device.position_signal_upper;
+    uint32_t x2 = GSS_device.position_signal_lower;
+
+    if (x1 != x2) {
+        GSS_device.position_slope  = (y1 - y2) / (float)( (int32_t)x1 - (int32_t)x2 );
+        GSS_device.position_offset = y1 - GSS_device.position_slope * (float)x1;
+    }
+}
+
+//==================== 简单的闪存写封装 ====================
+
 void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value)
 {
     (void)EEPROM_FLASH_WriteU32(addr, value);
-}
-
-void APP_USER_Mileage_Flash_Save_Handle(void)
-{
-    uint32_t now        = HAL_GetTick();
-    uint32_t meters_now = g_total_meters / 1000; // 转整米比较
-
-    // 步进触发
-    if ((meters_now - s_last_save_meters) >= g_mileage_save_step_m)
-    {
-        FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
-        s_last_save_meters = meters_now;
-        s_last_save_tick   = now;
-        return;
-    }
-
-    // 定时触发（兜底）
-    if ((now - s_last_save_tick) >= g_mileage_save_interval_ms)
-    {
-        FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
-        s_last_save_meters = meters_now;
-        s_last_save_tick   = now;
-        return;
-    }
-}
-
- void APP_USER_UpdateDevicePositionAndSpeed(void)
-{
-    // 相对位置（米）
-    GSS_device.position_data_real = (float)APP_USER_Get_Relative_Position();
-    // 编码器当前计数（AD）
-    GSS_device.position_data_ad = g_current_position;
-    // 实时速度
-    GSS_device.real_speed = APP_USER_Get_Real_Speed();
-}
-
-
-// 4. 运行方向判断与赋值
- void APP_USER_UpdateRunDirection(void)
-{
-    int32_t abs_position_diff = (position_diff < 0) ? -position_diff : position_diff;
-    static uint8_t stop_count = 0;
-    static uint8_t last_direction = 0;
-    uint8_t is_really_stopped = (abs_position_diff <= 10 && GSS_device.real_speed < 0.01f);
-
-    if (position_diff > 50)
-    {
-        GSS_device.run_direction = 1;  // 向上
-        last_direction = 1;
-        stop_count = 0;
-    }
-    else if (position_diff < -50)
-    {
-        GSS_device.run_direction = 2;  // 向下
-        last_direction = 2;
-        stop_count = 0;
-    }
-    else
-    {
-        if (is_really_stopped)
-        {
-            GSS_device.run_direction = 0;  // 停止
-            last_direction = 0;
-            stop_count = 0;
-        }
-        else
-        {
-            stop_count++;
-            if (stop_count >= 2)
-            {
-                GSS_device.run_direction = 0;  // 停止或微小移动
-                last_direction = 0;
-            }
-            else
-            {
-                GSS_device.run_direction = last_direction;
-            }
-        }
-    }
 }
