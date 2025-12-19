@@ -380,29 +380,7 @@ void APP_USER_Process_Device_Data(void)
 /**
  * @brief  按钮扫描（用于设置零点）
  */
-//void APP_USER_button_Loop(void)
-//{
-//    current_button_state = BSP_GPIO_Get(0xBC); // PB12 = 0xBC
-//    current_time = HAL_GetTick();
 
-//    if (g_button_last_state == GPIO_PIN_SET && current_button_state == GPIO_PIN_RESET)
-//    {
-//        g_button_press_time = current_time;
-//        g_button_press_flag = 1;
-//    }
-//    else if (g_button_last_state == GPIO_PIN_RESET && current_button_state == GPIO_PIN_SET)
-//    {
-//        if (g_button_press_flag && (current_time - g_button_press_time >= 50)) // 防抖，至少50ms
-//        {
-//            GSS_device.position_zero_point = g_current_position;
-//            EEPROM_FLASH_WriteU32(FLASH_POSITION_ZERO_POINT, GSS_device.position_zero_point);
-////            alarm_button_or_dwin = 1; // 按钮标定为0，DWIN标定为1
-////            EEPROM_FLASH_WriteU16(FLASH_BUTTON_OR_DWIN, alarm_button_or_dwin);
-//        }
-//        g_button_press_flag = 0;
-//    }
-//    g_button_last_state = current_button_state;
-//}
 
 ButtonEvent Button_DetectEvent(void)
 {
@@ -458,7 +436,13 @@ void APP_USER_button_Loop(void)
           EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper);//保存位置信号上限	
           InitSmartCalibration();		
           mode_switch = 1;
-          EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);					
+          EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);			
+
+					// == 新增：累计里程设为当前位置实际米数 ==
+          float curr_pos_m = APP_USER_Get_Relative_Position();
+          g_total_meters = (uint32_t)(curr_pos_m * 1000.0f);
+          s_total_distance_m_f = curr_pos_m;
+          FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
 
           // 按键提示：响两声（每声100ms，中间150ms，非阻塞）
           Relay_Beep_N_Times(2);

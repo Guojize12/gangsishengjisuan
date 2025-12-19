@@ -7,6 +7,7 @@
 extern uint32_t g_current_position;
 extern int32_t  position_diff;
 extern uint32_t g_total_meters; // 供 loadini 初始化
+extern float s_total_distance_m_f;
 
 // 位置/里程/Modbus 相关接口
 void Modbus_Send_ReadCmd(void);
