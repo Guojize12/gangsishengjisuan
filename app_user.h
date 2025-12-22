@@ -5,8 +5,18 @@
 extern "C" {
 #endif
 
-/* 提前提供 AlarmInfo 的前置声明，确保在下方 include 的头文件（如 app_config.h -> app_dwin_sub.h）
-   使用 extern AlarmInfo alarm_info[3]; 时类型已知 */
+/* 功能概览（业务层）
+   - APP_USER_Init: 业务初始化，启动Modbus与按键定时器，加载参数，初始化通道状态与声光报警端口
+   - APP_USER_ADC_Loop: 采样→断线检测→系统稳定判定→报警等级计算→设备数据处理→报警记录与输出→蜂鸣任务
+   - 按键两步标定状态机（APP_USER_button_Loop）：
+       第一次按键：设零点、模式置预热、重置总预热超时计时器、响一声；
+       1分钟未二次按键：自动切检测但不保存参数、响两声；
+       10分钟未二次按键：超时回退等待第一次；
+       第二次按键：保存上限、计算斜率/偏置、模式置检测、更新里程、响两声。
+   - 显示与方向：锁定/解锁显示、DWIN显示数据维护、运行方向更新
+   - 位置/速度/里程：位置与速度在 position.c 计算；此处统一同步与保存
+*/
+
 typedef struct AlarmInfo AlarmInfo;
 
 #include "bsp_config.h"
@@ -67,12 +77,15 @@ typedef struct AlarmInfo AlarmInfo;
 #define     APP_IAP_ADDR_STATUS_OTA                    (2*126)
 #define     OTA_FLAG_MAGIC_NUMBER                      1
 
+/* 声光报警器端口与时序配置（统一常量） */
+#define  ALARM_LIGHT_PORT       0xB9        // PB9端口编号
+#define  ALARM_LIGHT_DURATION   200         // 声光报警持续时间(ms)
+
 typedef struct
 {
     uint16_t   adcValue[50];
     bsp_rtc_def real_rtc;
 } bsp_dat_def;
-
 
 typedef enum 
 {
@@ -112,57 +125,55 @@ typedef enum
 
 ButtonEvent Button_DetectEvent(void);
 
-
-
 // 统一为 uint16_t
 extern uint16_t alarm_button_or_dwin;
 
 #define LED1_toggle() HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_9)
 #define LED_toggle()  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_8)
 
+/* 业务主接口 */
 void APP_USER_Init(void);
 void APP_USER_ADC_Loop(void);
-void APP_USER_Rx_Handle(void);
-void Modbus_Rec_Handle(void);  // Modbus接收处理
+void APP_USER_Rx_Handle(void);       // 预留：UART/外设接收处理（当前占位）
+void Modbus_Rec_Handle(void);        // Modbus接收处理
 
-// 位置数据处理函数
+/* 位置数据处理函数 */
 void Modbus_Process_Position_Data(uint32_t position);
 
-// 位置数据获取函数
+/* 位置数据获取函数 */
 uint32_t Modbus_Get_Current_Position(void);
 uint32_t Modbus_Get_Last_Position(void);
 uint32_t Modbus_Get_Position_Change_Count(void);
 int32_t  Modbus_Get_Position_Diff(void);
 void     Modbus_Reset_Position_Change_Count(void);
 
+/* IP与按键/标定 */
 void APP_USER_Ip_Set(void);
 
-// 位置标定相关函数
+/* 位置标定相关函数 */
 uint8_t APP_USER_Is_Position_Calibrated(void);
 float   APP_USER_Get_Relative_Position(void);
 void    APP_USER_Set_Zero_Point(uint32_t zero_point);
 void    detect_alarm(uint16_t data_filt[8][50]);
 
-// 总里程相关函数
+/* 总里程相关函数 */
 uint32_t APP_USER_Get_Total_Meters(void);
 void     APP_USER_Reset_Total_Meters(void);
 void     APP_USER_Process_Device_Data(void);
 
-// 传感器断开检测相关
+/* 传感器断开检测相关 */
 #define SENSOR_FIX_VALUE_DWIN  2048
 uint8_t APP_USER_Is_Sensor_Disconnected(void);
 void    APP_USER_Fix_Sensor_Data_For_DWIN(uint16_t data[4]);
 
-// DWIN屏专用显示数据（全局变量）
+/* DWIN屏专用显示数据（全局变量） */
 extern uint16_t g_dwin_display_data[4];
 
-// 编码器每圈计数
+/* 编码器每圈计数 */
 #define ENCODER_COUNTS_PER_REV 4096
 
 void APP_USER_Mileage_Flash_Save_Handle(void);
 void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
-
-
 
 #ifdef __cplusplus
 }
