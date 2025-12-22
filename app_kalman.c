@@ -18,7 +18,7 @@ extern void *memset(void* s, int c, size_t n);
 extern int printf(const char *format, ...);
 extern uint32_t EEPROM_FLASH_ReadU32(uint16_t Address);
 extern int EEPROM_FLASH_WriteU32(uint16_t Address, uint32_t Data);
-//extern void EEPROM_FLASH_WriteU16(uint16_t Address, uint16_t Data);
+
 extern uint32_t HAL_GetTick(void); // 获取毫秒时钟
 
 // 确保包含isfinite函数
@@ -526,8 +526,10 @@ void handle_mode_switch(uint16_t data1[4]) {
 }
 
 // 预热模式的详细流程
-void process_warmup_mode(uint16_t data1[4]) {
-    if (warmup_init_flag == 0) {
+void process_warmup_mode(uint16_t data1[4])
+{
+    if (warmup_init_flag == 0) 
+		{
         warmup_init_flag = 1;
         warmup_init();
         LOG("Warmup mode initialization completed.\n");
@@ -552,7 +554,8 @@ void process_warmup_mode(uint16_t data1[4]) {
             g_detector.warmup_complete = 1;
             LOG("Auto-switched to DETECTION (timeout=%lu ms). Samples=%lu\n",
                 (unsigned long)elapsed_ms, (unsigned long)g_detector.warmup_sample_count);
-        } else 
+        }
+				else 
         {
             // 关键改动：即使<200点，也切换（但不保存），只保留原参数
             mode_switch = 1;
