@@ -217,14 +217,21 @@ static void APP_USER_Check_System_Stability(void)
 
 static void APP_USER_Check_Alarm_Level(void)
 {
-    if (data_ready && system_stable) {
-        uint16_t data[4];
-        for (int ch = 0; ch < 4; ch++) data[ch] = (uint16_t)Value_real[ch].adcValue[0];
-        if (sensor_is_disconnected) {
-            final_alarm_level = 0;
-        } else {
-            final_alarm_level = process_kalman(data);
-        }
+    if (!data_ready) return;
+
+    uint16_t data[4];
+    for (int ch = 0; ch < 4; ch++) {
+        data[ch] = (uint16_t)Value_real[ch].adcValue[0];
+    }
+
+    // 始终运行卡尔曼主流程，以便预热超时自动切换能生效
+    uint8_t computed = process_kalman(data);
+
+    // 仅在系统稳定且传感器未断开时，输出报警等级；其他情况下不报警
+    if (system_stable && !sensor_is_disconnected) {
+        final_alarm_level = computed;
+    } else {
+        final_alarm_level = 0;
     }
 }
 
@@ -308,9 +315,6 @@ void APP_USER_Init(void)
 
     // 通道波动信息初始化
     memset(channel_fluctuation, 0, sizeof(channel_fluctuation));
-	
-  	warmup_init();
-	  
 
 }
 
@@ -417,7 +421,8 @@ ButtonEvent Button_DetectEvent(void)
 #define CALIBRATION_SECOND_PRESS_TIMEOUT_MS   (600000UL) // 10分钟
 #define PREHEAT_AFTER_FIRST_PRESS_TIMEOUT_MS  (60000UL)  // 1分钟
 
-typedef enum {
+typedef enum 
+{
     CAL_WAIT_FIRST = 0,   // 等待第一次按键
     CAL_WAIT_SECOND       // 已完成第一次，等待第二次
 } CalibButtonState;
@@ -425,30 +430,30 @@ typedef enum {
 void APP_USER_button_Loop(void)
 {
     static CalibButtonState cal_state = CAL_WAIT_FIRST;
-    static uint32_t first_press_tick = 0; // 记录第一次按键释放的时间
+    static uint32_t first_press_tick = 0;     // 记录第一次按键释放的时间
+    static uint8_t  one_min_switch_done = 0;  // 1分钟自动切换是否已执行
 
-    // 若处于等待第二次状态，优先检查是否达到1分钟自动进入检测模式
+    // 若处于等待第二次状态，优先检查是否达到超时
     if (cal_state == CAL_WAIT_SECOND && first_press_tick != 0)
     {
         uint32_t now = HAL_GetTick();
+        uint32_t elapsed = now - first_press_tick;
 
-        // 1分钟后自动切换到检测模式（不依赖样本数，不保存参数）
-        if (now - first_press_tick >= PREHEAT_AFTER_FIRST_PRESS_TIMEOUT_MS)
+        // 10分钟超时：回到初始，且只执行一次（通过清零 first_press_tick）
+        if (elapsed >= CALIBRATION_SECOND_PRESS_TIMEOUT_MS)
+        {
+            cal_state = CAL_WAIT_FIRST;
+            first_press_tick = 0;
+            one_min_switch_done = 0; // 重置，为下一轮流程准备
+        }
+        // 1分钟：仅切换到检测模式，不回到初始状态；只执行一次
+        else if (!one_min_switch_done && elapsed >= PREHEAT_AFTER_FIRST_PRESS_TIMEOUT_MS)
         {
             mode_switch = 1;
             EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
-            // 提示：两声（可选）
             Relay_Beep_N_Times(2);
-
-            // 完成一次切换后，回到等待第一次
-            first_press_tick = 0;
-            cal_state = CAL_WAIT_FIRST;
-        }
-        else if (now - first_press_tick >= CALIBRATION_SECOND_PRESS_TIMEOUT_MS)
-        {
-            // 10分钟超时：回到等待第一次状态（原有逻辑保留）
-            cal_state = CAL_WAIT_FIRST;
-            first_press_tick = 0;
+            one_min_switch_done = 1;  // 标记已执行，避免重复动作
+            // 不修改 cal_state / first_press_tick，继续等待第二次按键
         }
     }
 
@@ -476,11 +481,12 @@ void APP_USER_button_Loop(void)
         // 重置总预热超时计时器，表示有用户交互
         warmup_reset_timeout_counter();
 
-        // 按键提示：响一声（100ms），间隔150ms）
+        // 按键提示：响一声
         Relay_Beep_N_Times(1);
 
-        // 进入等待第二次状态，并记录时间戳（用于1分钟自动切换）
+        // 进入等待第二次状态，并记录时间戳（用于1分钟与10分钟判断）
         first_press_tick = HAL_GetTick();
+        one_min_switch_done = 0; // 开始新一轮计时，尚未执行1分钟切换
         cal_state = CAL_WAIT_SECOND;
     }
     else // CAL_WAIT_SECOND
@@ -503,6 +509,7 @@ void APP_USER_button_Loop(void)
 
         // 一轮完成，回到等待第一次
         first_press_tick = 0;
+        one_min_switch_done = 0;
         cal_state = CAL_WAIT_FIRST;
     }
 }
