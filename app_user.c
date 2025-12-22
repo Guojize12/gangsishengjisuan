@@ -21,12 +21,7 @@ static Timer g_timer_button_Loop = {0};
 // 通道波动信息
 channel_fluctuation_t channel_fluctuation[CHANNEL_NUM];// 通道波动信息
 
-// 标定相关变量（仅用于按键扫描）
-static uint8_t  g_button_last_state = 1;     // 上次按键状态（默认高电平）
-static uint32_t g_button_press_time = 0;     // 按键按下时间
-static uint8_t  g_button_press_flag = 0;     // 按键按下标志
-static uint8_t  current_button_state;
-static uint32_t current_time;
+// 旧的按键扫描变量未使用，移除以优化结构
 
 uint8_t  alarm_light_trig = 0;  // 声光报警触发标志
 uint8_t  alarm_dtu_trig   = 0;
@@ -86,8 +81,9 @@ static BeepState g_beep_state    = BEEP_IDLE;
 static uint8_t   g_beep_remain   = 0;           // 剩余鸣叫次数
 static uint32_t  g_beep_last_tick= 0;
 
-#define BEEP_ON_TIME    200    // ms，单次鸣叫时长
-#define BEEP_OFF_TIME   200     // ms，间隔时长
+// 调整为注释中所述：单声100ms，间隔150ms
+#define BEEP_ON_TIME    100    // ms，单次鸣叫时长
+#define BEEP_OFF_TIME   150    // ms，间隔时长
 
 // 启动N次提示鸣叫（非阻塞）
 static inline void Relay_Beep_N_Times(uint8_t n)
@@ -410,45 +406,72 @@ ButtonEvent Button_DetectEvent(void)
     return event;
 }
 
+// ========= 新增：按键两步标定状态机 + 10分钟超时回退 =========
+#define CALIBRATION_SECOND_PRESS_TIMEOUT_MS   (600000UL) // 10分钟
+
+typedef enum {
+    CAL_WAIT_FIRST = 0,   // 等待第一次按键
+    CAL_WAIT_SECOND       // 已完成第一次，等待第二次
+} CalibButtonState;
+
 void APP_USER_button_Loop(void)
 {
-    static uint8_t button_press_counter = 0; 
+    static CalibButtonState cal_state = CAL_WAIT_FIRST;
+    static uint32_t first_press_tick = 0; // 记录第一次按键释放的时间
+
+    // 若处于等待第二次状态，检查是否超时（10分钟）
+    if (cal_state == CAL_WAIT_SECOND && first_press_tick != 0)
+    {
+        uint32_t now = HAL_GetTick();
+        if (now - first_press_tick >= CALIBRATION_SECOND_PRESS_TIMEOUT_MS)
+        {
+            // 超时：回到等待第一次状态
+            cal_state = CAL_WAIT_FIRST;
+            first_press_tick = 0;
+        }
+    }
 
     ButtonEvent event = Button_DetectEvent();
-    if (event == BUTTON_EVENT_RELEASED)
+    if (event != BUTTON_EVENT_RELEASED)
+        return;
+
+    // 仅在“释放”事件上处理一次
+    if (cal_state == CAL_WAIT_FIRST)
     {
-        if ((button_press_counter % 2) == 0)
-        {
-          // 第一次
-          APP_USER_Set_Zero_Point(g_current_position);
-          GSS_device.position_signal_lower = g_current_position;
-          EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower);//保存位置信号下限
-          mode_switch = 0;
-          EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+        // 第一次：设置零点为当前AD，实时位置归零；保存下限信号；模式置0
+        APP_USER_Set_Zero_Point(g_current_position);
+        GSS_device.position_signal_lower = g_current_position;
+        EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower); // 保存位置信号下限
+        mode_switch = 0;
+        EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
 
-          // 按键提示：响一声（100ms），间隔150ms（非阻塞）
-          Relay_Beep_N_Times(1);
-        }
-        else
-        {
-          // 第二次
-          GSS_device.position_signal_upper = g_current_position;
-          EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper);//保存位置信号上限	
-          InitSmartCalibration();		
-          mode_switch = 1;
-          EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);			
+        // 按键提示：响一声（100ms），间隔150ms）
+        Relay_Beep_N_Times(1);
 
-					// == 新增：累计里程设为当前位置实际米数 ==
-          float curr_pos_m = APP_USER_Get_Relative_Position();
-          g_total_meters = (uint32_t)(curr_pos_m * 1000.0f);
-          s_total_distance_m_f = curr_pos_m;
-          FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
+        // 进入等待第二次状态，并记录时间戳
+        first_press_tick = HAL_GetTick();
+        cal_state = CAL_WAIT_SECOND;
+    }
+    else // CAL_WAIT_SECOND
+    {
+        // 第二次：保存上限信号，计算斜率与偏置，模式置1
+        GSS_device.position_signal_upper = g_current_position;
+        EEPROM_FLASH_WriteU32(FLASH_SIG_TOP_DATA, GSS_device.position_signal_upper); // 保存位置信号上限
+        InitSmartCalibration();
+        mode_switch = 1;
+        EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
 
-          // 按键提示：响两声（每声100ms，中间150ms，非阻塞）
-          Relay_Beep_N_Times(2);
-        }
-        button_press_counter++;
-        if(button_press_counter >= 2) // 超过1轮归0
-            button_press_counter = 0;
+        // 累计里程设为当前位置实际米数
+        float curr_pos_m = APP_USER_Get_Relative_Position();
+        g_total_meters = (uint32_t)(curr_pos_m * 1000.0f);
+        s_total_distance_m_f = curr_pos_m;
+        FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
+
+        // 提示：响两声
+        Relay_Beep_N_Times(2);
+
+        // 一轮完成，回到等待第一次
+        first_press_tick = 0;
+        cal_state = CAL_WAIT_FIRST;
     }
 }
