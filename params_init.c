@@ -110,8 +110,8 @@ void WriteDefaultParamsToFlash(void)
     EEPROM_FLASH_WriteU16(FLASH_SMALL_ALARM_COUNT, small_alarm_count);
     EEPROM_FLASH_WriteU16(FLASH_BIG_ALARM_COUNT, big_alarm_count);
 
-//    mode_switch = 0;
-//    EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+    mode_switch = 0;
+    EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
 
     GSS_device.total_length = 200;
     EEPROM_FLASH_WriteU16(TOTAL_LEN_1, GSS_device.total_length);
@@ -130,21 +130,6 @@ void WriteDefaultParamsToFlash(void)
     EEPROM_FLASH_WriteU16(FLASH_SAVE_ENABLE, (uint16_t)(flash_save_enable));
 }
 
-// 4. 智能标定相关初始化
-void InitSmartCalibration(void)
-{
-
-		float aucy1 = (float)GSS_device.position_range_upper;
-		float aucy2 = (float)GSS_device.position_range_lower;
-		uint32_t aucx1 =  GSS_device.position_signal_upper;
-		uint32_t aucx2 = GSS_device.position_signal_lower;
-
-		if (aucx1 != aucx2)
-		{
-				GSS_device.position_slope = (aucy1 - aucy2) / (aucx1 - aucx2);
-				GSS_device.position_offset = aucy1 - GSS_device.position_slope * aucx1;
-		}
-}
 
 // 5. 主函数
 void loadini(void)

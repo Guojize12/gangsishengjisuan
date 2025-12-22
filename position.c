@@ -82,9 +82,13 @@ static void Modbus_Process_Position_Data(uint32_t ad_now)
     // 2) 实时位置（米，支持正负）
     //    公式：pos_m = slope * (AD - zero_point) + offset
     GSS_device.position_data_ad    = g_current_position;
-    GSS_device.position_data_real  = (float)GSS_device.position_slope *
+		
+		//位置小于0置0
+		float pos_calc = (float)GSS_device.position_slope *
                                      ( (int32_t)GSS_device.position_data_ad - (int32_t)GSS_device.position_zero_point )
                                      + (float)GSS_device.position_offset;
+		
+    GSS_device.position_data_real  = pos_calc < 0 ? 0.0f : pos_calc;
 
     // 3) 当前位移（米）
     //    用标定的 slope 将AD差值转米；里程与速度均按位移的绝对值计（速度为标量）
@@ -111,6 +115,23 @@ static void Modbus_Process_Position_Data(uint32_t ad_now)
             int32_t ad_diff_for_speed = (int32_t)ad_now - (int32_t)s_last_speed_ad;
             float   delta_m_for_speed = fabsf((float)ad_diff_for_speed * (float)GSS_device.position_slope);
             g_real_speed = delta_m_for_speed / (float)dt_s;
+					
+//				// 日志打印：详细输出所有相关参数
+//         LOG("SpeedCalc: dt_s=%lu, s_last_speed_ad=%lu, ad_now=%lu, ad_diff=%ld, slope=%.7f (m/AD), delta_m=%.7f (m), speed=%.7f (m/s)\n",
+//        (unsigned long)dt_s,
+//        (unsigned long)s_last_speed_ad,
+//        (unsigned long)ad_now,
+//        (long)ad_diff_for_speed,
+//        GSS_device.position_slope,
+//        delta_m_for_speed,
+//        g_real_speed
+//        );
+//					
+					
+					
+					
+					
+					
 
             // 更新速度计算基准
             s_last_speed_rtc = now_rtc;
@@ -232,7 +253,8 @@ void APP_USER_Reset_Total_Meters(void)
 float APP_USER_Get_Relative_Position(void)
 {
     int32_t ad_diff = (int32_t)GSS_device.position_data_ad - (int32_t)GSS_device.position_zero_point;
-    return (float)(GSS_device.position_slope * ad_diff + GSS_device.position_offset);
+    float pos = (float)(GSS_device.position_slope * ad_diff + GSS_device.position_offset);
+    return pos < 0 ? 0.0f : pos;
 }
 
 // 标定零点（写入闪存）

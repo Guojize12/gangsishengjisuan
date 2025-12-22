@@ -9,7 +9,7 @@ void loadini(void);
 void InitCoreData(void);
 void LoadParamsFromFlash(void);
 void WriteDefaultParamsToFlash(void);
-void InitSmartCalibration(void);
+
 
 #ifdef __cplusplus
 }
