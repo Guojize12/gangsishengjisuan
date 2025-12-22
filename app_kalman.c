@@ -18,6 +18,7 @@ extern void *memset(void* s, int c, size_t n);
 extern int printf(const char *format, ...);
 extern uint32_t EEPROM_FLASH_ReadU32(uint16_t Address);
 extern int EEPROM_FLASH_WriteU32(uint16_t Address, uint32_t Data);
+extern int EEPROM_FLASH_WriteU16(uint16_t Address, uint16_t Data);
 
 extern uint32_t HAL_GetTick(void); // 获取毫秒时钟
 
@@ -434,13 +435,24 @@ void detection_init(uint16_t measurement[SENSOR_COUNT])
     int load_result = load_config_from_flash();
     if (load_result != 0)
     {
-        LOG("Config load failed. Resetting to warmup mode.\n");
-        mode_switch = 0;
-        warmup_init_flag = 0;
-        warmup_save_done = 0;
-        detection_init_flag = 0;
-        return;
+        // 不再回退预热：使用内存中的参数或安全默认值继续
+        LOG("Config load failed. Proceeding with in-memory/default parameters.\n");
+
+        // 若预热期间尚未形成任何参数（全0且没有递推样本），则填充安全默认值
+        int no_warmup = 1;
+        for (int i = 0; i < SENSOR_COUNT; i++) {
+            if (g_detector.warmup_running_n[i] != 0U) { no_warmup = 0; break; }
+        }
+        if (no_warmup) {
+            for (int i = 0; i < SENSOR_COUNT; i++) {
+                g_detector.config_params.baseline_mean[i]      = 2048.0f;
+                g_detector.config_params.baseline_std[i]       = (float)MIN_VARIANCE_THRESHOLD;
+                g_detector.config_params.adaptive_threshold[i] = g_detector.config_params.baseline_std[i] * 3.0f;
+            }
+        }
+        // 保持 mode_switch=1，继续初始化检测，无需修改 detection_init_flag
     }
+
     // 初始化卡尔曼滤波器
     for (int i = 0; i < SENSOR_COUNT; i++)
     {
@@ -529,7 +541,7 @@ void handle_mode_switch(uint16_t data1[4]) {
 void process_warmup_mode(uint16_t data1[4])
 {
     if (warmup_init_flag == 0) 
-		{
+    {
         warmup_init_flag = 1;
         warmup_init();
         LOG("Warmup mode initialization completed.\n");
@@ -541,28 +553,23 @@ void process_warmup_mode(uint16_t data1[4])
     uint32_t elapsed_ms = now_ms - g_detector.warmup_start_time_ms;
     if (elapsed_ms >= g_detector.warmup_timeout_ms) 
     {
-        if (g_detector.warmup_sample_count >= WARMUP_SAMPLES)
+        // 无条件切换到检测模式
+        mode_switch = 1;
+        EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+        g_detector.warmup_complete = 1;
+
+        if (g_detector.warmup_sample_count >= WARMUP_SAMPLES && !warmup_save_done)
         {
-            if (!warmup_save_done)
-            {
-                warmup_finalize_and_prepare_config();
-                save_config_to_flash();
-                warmup_save_done = 1;
-            }
-            mode_switch = 1; // 先切换
-            EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch); // 再写入
-            g_detector.warmup_complete = 1;
-            LOG("Auto-switched to DETECTION (timeout=%lu ms). Samples=%lu\n",
+            warmup_finalize_and_prepare_config();
+            save_config_to_flash();
+            warmup_save_done = 1;
+            LOG("Auto-switched to DETECTION (timeout=%lu ms). Params SAVED. Samples=%lu\n",
                 (unsigned long)elapsed_ms, (unsigned long)g_detector.warmup_sample_count);
         }
-				else 
+        else
         {
-            // 关键改动：即使<200点，也切换（但不保存），只保留原参数
-            mode_switch = 1;
-            EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
-            g_detector.warmup_complete = 1;
-            LOG("Force auto-switch to DETECTION due to timeout (samples=%lu < %d). Keep previous parameters.\n",
-                (unsigned long)g_detector.warmup_sample_count, WARMUP_SAMPLES);
+            LOG("Auto-switched to DETECTION (timeout=%lu ms). Params NOT saved. Samples=%lu\n",
+                (unsigned long)elapsed_ms, (unsigned long)g_detector.warmup_sample_count);
         }
     }
 }

@@ -54,8 +54,8 @@ extern uint8_t alarm_dwin_trig;
 // 预热阶段配置
 #define WARMUP_SAMPLES 200
 #define CONFIG_FILE_PATH "wire_rope_config.bin"
-// 新增：预热最长时长（5分钟=300000ms），为“总预热超时”统一规则
-#define WARMUP_TIMEOUT_MS 30000U
+// 统一：预热最长时长（1分钟=60000ms）
+#define WARMUP_TIMEOUT_MS 60000U
 
 // 数值稳定性配置
 #define MIN_VARIANCE_THRESHOLD 1

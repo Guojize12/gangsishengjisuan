@@ -1,7 +1,7 @@
 #include "app_config.h"
 #include "app_user.h"
 #include <string.h>
-#include <stdio.h>
+#include <math.h>
 
 #include "app_dtu.h" // 用于GSS_device_alarm_stat和上报
 #include "sensor.h"   // 传感器断开检测与AD数据更新
@@ -407,8 +407,9 @@ ButtonEvent Button_DetectEvent(void)
     return event;
 }
 
-// ========= 新增：按键两步标定状态机 + 10分钟超时回退 =========
+// ========= 新增：按键两步标定状态机 + 1分钟自动切换检测 + 10分钟超时回退 =========
 #define CALIBRATION_SECOND_PRESS_TIMEOUT_MS   (600000UL) // 10分钟
+#define PREHEAT_AFTER_FIRST_PRESS_TIMEOUT_MS  (60000UL)  // 1分钟
 
 typedef enum {
     CAL_WAIT_FIRST = 0,   // 等待第一次按键
@@ -420,13 +421,26 @@ void APP_USER_button_Loop(void)
     static CalibButtonState cal_state = CAL_WAIT_FIRST;
     static uint32_t first_press_tick = 0; // 记录第一次按键释放的时间
 
-    // 若处于等待第二次状态，检查是否超时（10分钟）
+    // 若处于等待第二次状态，优先检查是否达到1分钟自动进入检测模式
     if (cal_state == CAL_WAIT_SECOND && first_press_tick != 0)
     {
         uint32_t now = HAL_GetTick();
-        if (now - first_press_tick >= CALIBRATION_SECOND_PRESS_TIMEOUT_MS)
+
+        // 1分钟后自动切换到检测模式（不依赖样本数，不保存参数）
+        if (now - first_press_tick >= PREHEAT_AFTER_FIRST_PRESS_TIMEOUT_MS)
         {
-            // 超时：回到等待第一次状态
+            mode_switch = 1;
+            EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+            // 提示：两声（可选）
+            Relay_Beep_N_Times(2);
+
+            // 完成一次切换后，回到等待第一次
+            first_press_tick = 0;
+            cal_state = CAL_WAIT_FIRST;
+        }
+        else if (now - first_press_tick >= CALIBRATION_SECOND_PRESS_TIMEOUT_MS)
+        {
+            // 10分钟超时：回到等待第一次状态（原有逻辑保留）
             cal_state = CAL_WAIT_FIRST;
             first_press_tick = 0;
         }
@@ -434,7 +448,7 @@ void APP_USER_button_Loop(void)
 
     ButtonEvent event = Button_DetectEvent();
 
-    // 新增：任何“按下”事件都重置“总预热超时计时器”
+    // 保留：任何“按下”事件都重置“总预热超时计时器”
     if (event == BUTTON_EVENT_PRESSED) {
         warmup_reset_timeout_counter();
     }
@@ -451,7 +465,7 @@ void APP_USER_button_Loop(void)
         EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower); // 保存位置信号下限
         mode_switch = 0;
         EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
-			  warmup_init_flag = 0;                     //
+        warmup_init_flag = 0; // 让预热重新初始化
 
         // 重置总预热超时计时器，表示有用户交互
         warmup_reset_timeout_counter();
@@ -459,7 +473,7 @@ void APP_USER_button_Loop(void)
         // 按键提示：响一声（100ms），间隔150ms）
         Relay_Beep_N_Times(1);
 
-        // 进入等待第二次状态，并记录时间戳
+        // 进入等待第二次状态，并记录时间戳（用于1分钟自动切换）
         first_press_tick = HAL_GetTick();
         cal_state = CAL_WAIT_SECOND;
     }
