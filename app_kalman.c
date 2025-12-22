@@ -494,18 +494,26 @@ int get_system_mode(void)
 
 // 检查是否可以切换到检测模式（按键触发等）
 void handle_mode_switch(uint16_t data1[4]) {
-    if (mode_switch == 1 && !warmup_save_done && !detection_init_flag) {
-        if (g_detector.warmup_sample_count < WARMUP_SAMPLES) {
-            LOG("Denied switch to DETECTION: samples=%lu < %d\n",
-                (unsigned long)g_detector.warmup_sample_count, WARMUP_SAMPLES);
-            mode_switch = 0; // 回退
-        } else {
-            warmup_finalize_and_prepare_config();
-            save_config_to_flash();
-            warmup_save_done = 1;
+    // 改动点：
+    // 1) 不再因样本不足200而回退到预热模式
+    // 2) 样本>=200：保存并切换；样本<200：不保存，直接进入检测，沿用上次参数
+    if (mode_switch == 1 && !detection_init_flag) {
+        if (g_detector.warmup_sample_count >= WARMUP_SAMPLES) {
+            if (!warmup_save_done) {
+                warmup_finalize_and_prepare_config();
+                save_config_to_flash();
+                warmup_save_done = 1;
+            }
             g_detector.warmup_complete = 1;
-            LOG("Switched to DETECTION by BUTTON. Samples=%lu\n", (unsigned long)g_detector.warmup_sample_count);
+            LOG("Switched to DETECTION by BUTTON. Samples=%lu\n",
+                (unsigned long)g_detector.warmup_sample_count);
+        } else {
+            // 不足200点：不保存，不覆盖；直接进入检测模式，使用上次的参数
+            g_detector.warmup_complete = 1;
+            LOG("Force switch to DETECTION (samples=%lu < %d). Keep previous parameters.\n",
+                (unsigned long)g_detector.warmup_sample_count, WARMUP_SAMPLES);
         }
+        // 注意：真正的检测初始化在 process_detection_mode 中进行（detection_init_flag 将置1）
     }
 }
 
@@ -570,4 +578,3 @@ uint8_t process_kalman(uint16_t data1[4]) {
 
     return defect_result;
 }
-
