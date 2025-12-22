@@ -9,6 +9,8 @@
 #include "params_init.h" // 参数初始化
 #include "app_kalman.h"  // 新增：用于总预热超时计时器重置
 
+
+
 extern uint8_t flash_save_enable;
 extern float MEAN_DEVIATION_THRESHOLD;
 extern float SENSOR_DEVIATION_THRESHOLD;
@@ -306,6 +308,10 @@ void APP_USER_Init(void)
 
     // 通道波动信息初始化
     memset(channel_fluctuation, 0, sizeof(channel_fluctuation));
+	
+  	warmup_init();
+	  
+
 }
 
 /**

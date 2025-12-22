@@ -135,6 +135,8 @@ int warmup_validate_config(void);
 void warmup_init_default_config(void);
 void kalman_system_init(void);
 
+void warmup_init(void);
+
 void handle_mode_switch(uint16_t data1[4]);
 void process_warmup_mode(uint16_t data1[4]);
 uint8_t process_detection_mode(uint16_t data1[4]);

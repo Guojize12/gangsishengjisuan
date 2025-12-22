@@ -585,12 +585,14 @@ uint8_t process_detection_mode(uint16_t data1[4]) {
 }
 
 // 主流程
-uint8_t process_kalman(uint16_t data1[4]) {
+uint8_t process_kalman(uint16_t data1[4]) 
+{
     uint8_t defect_result = 0;
 
     handle_mode_switch(data1);
 
-    switch (mode_switch) {
+    switch (mode_switch) 
+		{
         case 0:
             process_warmup_mode(data1);
             defect_result = 0;
