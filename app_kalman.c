@@ -518,6 +518,8 @@ void handle_mode_switch(uint16_t data1[4]) {
 }
 
 // 预热模式的详细流程
+
+
 void process_warmup_mode(uint16_t data1[4]) {
     if (warmup_init_flag == 0) {
         warmup_init_flag = 1;
@@ -529,19 +531,28 @@ void process_warmup_mode(uint16_t data1[4]) {
 
     uint32_t now_ms = HAL_GetTick();
     uint32_t elapsed_ms = now_ms - g_detector.warmup_start_time_ms;
-    if (elapsed_ms >= g_detector.warmup_timeout_ms) {
-        if (g_detector.warmup_sample_count >= WARMUP_SAMPLES) {
-            if (!warmup_save_done) {
+    if (elapsed_ms >= g_detector.warmup_timeout_ms) 
+    {
+        if (g_detector.warmup_sample_count >= WARMUP_SAMPLES)
+        {
+            if (!warmup_save_done)
+            {
                 warmup_finalize_and_prepare_config();
                 save_config_to_flash();
                 warmup_save_done = 1;
             }
-            mode_switch = 1; // 自动切换到检测模式
+            mode_switch = 1; // 先切换
+            EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch); // 再写入
             g_detector.warmup_complete = 1;
             LOG("Auto-switched to DETECTION (timeout=%lu ms). Samples=%lu\n",
                 (unsigned long)elapsed_ms, (unsigned long)g_detector.warmup_sample_count);
-        } else {
-            LOG("Timeout reached but samples=%lu < %d. Waiting for 200 samples...\n",
+        } else 
+        {
+            // 关键改动：即使<200点，也切换（但不保存），只保留原参数
+            mode_switch = 1;
+            EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+            g_detector.warmup_complete = 1;
+            LOG("Force auto-switch to DETECTION due to timeout (samples=%lu < %d). Keep previous parameters.\n",
                 (unsigned long)g_detector.warmup_sample_count, WARMUP_SAMPLES);
         }
     }
