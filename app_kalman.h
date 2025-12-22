@@ -54,8 +54,8 @@ extern uint8_t alarm_dwin_trig;
 // 预热阶段配置
 #define WARMUP_SAMPLES 200
 #define CONFIG_FILE_PATH "wire_rope_config.bin"
-// 新增：预热最长时长（5分钟=300000ms）
-#define WARMUP_TIMEOUT_MS 300000U
+// 新增：预热最长时长（5分钟=300000ms），为“总预热超时”统一规则
+#define WARMUP_TIMEOUT_MS 30000U
 
 // 数值稳定性配置
 #define MIN_VARIANCE_THRESHOLD 1
@@ -138,5 +138,8 @@ void kalman_system_init(void);
 void handle_mode_switch(uint16_t data1[4]);
 void process_warmup_mode(uint16_t data1[4]);
 uint8_t process_detection_mode(uint16_t data1[4]);
+
+// 新增：提供统一的“总预热超时计时器重置”接口，供按键事件调用
+void warmup_reset_timeout_counter(void);
 
 #endif /*__APP_KALMAN_H__ */

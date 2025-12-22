@@ -6,10 +6,10 @@
  * 钢丝绳缺陷检测系统 -
  * 简化版卡尔曼滤波器实现
  */
-#include <math.h>
-#include <string.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+#include <math.h>
 
 // 函数声明（来自其他模块）
 extern double fabs(double x);
@@ -18,6 +18,7 @@ extern void *memset(void* s, int c, size_t n);
 extern int printf(const char *format, ...);
 extern uint32_t EEPROM_FLASH_ReadU32(uint16_t Address);
 extern int EEPROM_FLASH_WriteU32(uint16_t Address, uint32_t Data);
+//extern void EEPROM_FLASH_WriteU16(uint16_t Address, uint16_t Data);
 extern uint32_t HAL_GetTick(void); // 获取毫秒时钟
 
 // 确保包含isfinite函数
@@ -396,11 +397,18 @@ void warmup_init(void)
     warmup_save_done = 0;
     detection_init_flag = 0;
 
-    // 记录预热起始时间/超时阈值
+    // 记录预热起始时间/超时阈值（总预热超时）
     g_detector.warmup_start_time_ms = HAL_GetTick();
     g_detector.warmup_timeout_ms    = WARMUP_TIMEOUT_MS;
 
     LOG("Warmup initialized. timeout=%u ms\n", (unsigned)g_detector.warmup_timeout_ms);
+}
+
+// 新增：统一的“总预热超时计时器重置”实现
+void warmup_reset_timeout_counter(void)
+{
+    g_detector.warmup_start_time_ms = HAL_GetTick();
+    LOG("Warmup timeout counter reset.\n");
 }
 
 void warmup_process_data(const uint16_t measurement[SENSOR_COUNT])
@@ -518,8 +526,6 @@ void handle_mode_switch(uint16_t data1[4]) {
 }
 
 // 预热模式的详细流程
-
-
 void process_warmup_mode(uint16_t data1[4]) {
     if (warmup_init_flag == 0) {
         warmup_init_flag = 1;

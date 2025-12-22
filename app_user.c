@@ -1,12 +1,13 @@
 #include "app_config.h"
 #include "app_user.h"
 #include <string.h>
-#include <stdint.h>
+#include <stdio.h>
 
 #include "app_dtu.h" // 用于GSS_device_alarm_stat和上报
 #include "sensor.h"   // 传感器断开检测与AD数据更新
 #include "position.h" // 位置/里程/Modbus/速度
 #include "params_init.h" // 参数初始化
+#include "app_kalman.h"  // 新增：用于总预热超时计时器重置
 
 extern uint8_t flash_save_enable;
 extern float MEAN_DEVIATION_THRESHOLD;
@@ -17,6 +18,7 @@ extern float DEFECT_SCORE_THRESHOLD;
 extern gss_device_alarm_stat GSS_device_alarm_stat;
 static Timer g_timer_modbus = {0};
 static Timer g_timer_button_Loop = {0};
+extern uint8_t warmup_init_flag;
 
 // 通道波动信息
 channel_fluctuation_t channel_fluctuation[CHANNEL_NUM];// 通道波动信息
@@ -377,7 +379,6 @@ void APP_USER_Process_Device_Data(void)
  * @brief  按钮扫描（用于设置零点）
  */
 
-
 ButtonEvent Button_DetectEvent(void)
 {
     static uint8_t last_state = GPIO_PIN_SET;
@@ -432,6 +433,12 @@ void APP_USER_button_Loop(void)
     }
 
     ButtonEvent event = Button_DetectEvent();
+
+    // 新增：任何“按下”事件都重置“总预热超时计时器”
+    if (event == BUTTON_EVENT_PRESSED) {
+        warmup_reset_timeout_counter();
+    }
+
     if (event != BUTTON_EVENT_RELEASED)
         return;
 
@@ -444,6 +451,10 @@ void APP_USER_button_Loop(void)
         EEPROM_FLASH_WriteU32(FLASH_SIG_BUT_DATA, GSS_device.position_signal_lower); // 保存位置信号下限
         mode_switch = 0;
         EEPROM_FLASH_WriteU16(FLASH_MODE_SWITCH, mode_switch);
+			  warmup_init_flag = 0;                     //
+
+        // 重置总预热超时计时器，表示有用户交互
+        warmup_reset_timeout_counter();
 
         // 按键提示：响一声（100ms），间隔150ms）
         Relay_Beep_N_Times(1);
