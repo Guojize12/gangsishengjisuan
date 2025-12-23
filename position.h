@@ -7,7 +7,7 @@
 extern uint32_t g_current_position;
 extern int32_t  position_diff;
 extern uint32_t g_total_meters; // 供 loadini 初始化
-extern float    s_total_distance_m_f;
+extern float s_total_distance_m_f;
 
 // 位置/里程/Modbus 相关接口
 void Modbus_Send_ReadCmd(void);
@@ -26,20 +26,15 @@ void     APP_USER_Reset_Total_Meters(void);
 float    APP_USER_Get_Relative_Position(void);
 void     APP_USER_Set_Zero_Point(uint32_t zero_point);
 
-// 新增：速度获取接口（速度计算在 position 模块）
+// 新增：速度获取接口（速度计算迁移到 position 模块）
 float    APP_USER_Get_Real_Speed(void);
 
-// 里程/位置落盘策略实现（集中化），可在主循环或位置处理后调用
 void     APP_USER_Mileage_Flash_Save_Handle(void);
-
-// 保留旧接口声明（兼容调用处）：内部已转为集中化保存
 void     FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
-// 同步位置/速度至GSS_device（显示/上报用）
 void     APP_USER_UpdateDevicePositionAndSpeed(void);
 void     APP_USER_UpdateRunDirection(void);
 
-// 智能标定
 void     InitSmartCalibration(void);
 
 #endif
