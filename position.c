@@ -35,6 +35,8 @@ extern gss_device  GSS_device;
 
 extern void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value);
 
+static uint8_t first_run = 1;
+
 //==================== Modbus - 发送读取命令 ====================
 
 void Modbus_Send_ReadCmd(void)
@@ -69,11 +71,23 @@ static inline uint32_t RTC_SecOfDay(const bsp_rtc_def* t)
 
 static void Modbus_Process_Position_Data(uint32_t ad_now)
 {
+	
+	  LOGT("采样前: g_total_meters=%lu, s_total_distance_m_f=%.3f\n", g_total_meters, s_total_distance_m_f);
     // 0) 获取当前RTC时间（用于速度计算的绝对时间基准）
     bsp_rtc_def now_rtc = {0};
     BSP_RTC_Get(&now_rtc);
     uint32_t now_sod = RTC_SecOfDay(&now_rtc);
-
+		
+			if (first_run) 
+		{
+			g_last_position = ad_now;  // 首帧把last和current都设为实际AD
+			g_current_position = ad_now;
+			position_diff = 0;
+			first_run = 0;
+			// 之后的逻辑直接return，也可以不累计
+			return;
+		}
+		
     // 1) 原始计数更新与差值（有符号）
     g_last_position    = g_current_position;
     g_current_position = ad_now;
@@ -115,24 +129,7 @@ static void Modbus_Process_Position_Data(uint32_t ad_now)
             int32_t ad_diff_for_speed = (int32_t)ad_now - (int32_t)s_last_speed_ad;
             float   delta_m_for_speed = fabsf((float)ad_diff_for_speed * (float)GSS_device.position_slope);
             g_real_speed = delta_m_for_speed / (float)dt_s;
-					
-//				// 日志打印：详细输出所有相关参数
-//         LOG("SpeedCalc: dt_s=%lu, s_last_speed_ad=%lu, ad_now=%lu, ad_diff=%ld, slope=%.7f (m/AD), delta_m=%.7f (m), speed=%.7f (m/s)\n",
-//        (unsigned long)dt_s,
-//        (unsigned long)s_last_speed_ad,
-//        (unsigned long)ad_now,
-//        (long)ad_diff_for_speed,
-//        GSS_device.position_slope,
-//        delta_m_for_speed,
-//        g_real_speed
-//        );
-//					
-					
-					
-					
-					
-					
-
+				
             // 更新速度计算基准
             s_last_speed_rtc = now_rtc;
             s_last_speed_ad  = ad_now;
@@ -162,6 +159,19 @@ static void Modbus_Process_Position_Data(uint32_t ad_now)
     }
     s_last_direction = new_dir;
     GSS_device.run_direction = new_dir;
+		
+//		LOGT("Modbus采样: AD_now=%lu, delta_m_abs=%.5f, 累计米=%.5f, 总里程mm=%lu, AD_diff=%ld, slope=%.7f, 偏置=%.3f\n",
+//    g_current_position,           // 当前AD
+//    delta_m_abs,                  // 单帧物理位移（m）
+//    s_total_distance_m_f,         // 累加（m）
+//    g_total_meters,               // 累加（mm）
+//    position_diff,                // AD增量
+//    GSS_device.position_slope,    // 最新斜率
+//    GSS_device.position_offset    // 最新偏置
+		
+		LOGT("采样后: g_total_meters=%lu, s_total_distance_m_f=%.3f, 新增里程delta=%.5f\n",
+     g_total_meters, s_total_distance_m_f, delta_m_abs);
+
 }
 
 //==================== Modbus接收处理 ====================
@@ -336,4 +346,6 @@ void InitSmartCalibration(void)
 void FLASH_WriteU32_WithCheck(uint16_t addr, uint32_t value)
 {
     (void)EEPROM_FLASH_WriteU32(addr, value);
+	  LOGT("保存到Flash: addr=0x%04X, value=%lu\n", addr, value);
+	
 }
