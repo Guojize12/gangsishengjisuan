@@ -62,6 +62,8 @@ void LoadParamsFromFlash(void)
     big_alarm_count = EEPROM_FLASH_ReadU16(FLASH_BIG_ALARM_COUNT);
     last_big_alarm_count = big_alarm_count;
     g_total_meters = EEPROM_FLASH_ReadU32(FLASH_TOTAL_METERS);
+		s_total_distance_m_f = g_total_meters / 1000.0f;
+		
     // mode_switch = EEPROM_FLASH_ReadU16(FLASH_MODE_SWITCH);
     MEAN_DEVIATION_THRESHOLD = (float)EEPROM_FLASH_ReadU16(FLASH_MEAN_DEVIATION_THRESHOLD) / 10;
     SENSOR_DEVIATION_THRESHOLD = (float)EEPROM_FLASH_ReadU16(FLASH_SENSOR_DEVIATION_THRESHOLD) / 10;
@@ -69,6 +71,16 @@ void LoadParamsFromFlash(void)
     TREND_THRESHOLD = (float)EEPROM_FLASH_ReadU16(FLASH_TREND_THRESHOLD) / 10;
     DEFECT_SCORE_THRESHOLD = (float)EEPROM_FLASH_ReadU16(FLASH_DEFECT_SCORE_THRESHOLD) / 10;
     flash_save_enable = EEPROM_FLASH_ReadU16(FLASH_SAVE_ENABLE);
+		
+//		LOGT("掉电恢复: g_total_meters(flash)=%lu, s_total_distance_m_f=%.3f\n", g_total_meters, s_total_distance_m_f);
+//    LOGT("掉电恢复: AD上限=%lu, AD下限=%lu, 斜率=%.7f, 偏置=%.3f\n",
+//		GSS_device.position_signal_upper,
+//		GSS_device.position_signal_lower,
+//		GSS_device.position_slope,
+//		GSS_device.position_offset);
+//    LOGT("启动: g_total_meters(LOAD)%lu, s_total_distance_m_f=%.3f\n", g_total_meters, s_total_distance_m_f);
+
+
 }
 
 // 3. 初次上电或参数丢失时默认参数写入FLASH

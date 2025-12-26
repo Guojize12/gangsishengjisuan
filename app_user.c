@@ -22,6 +22,8 @@ static Timer g_timer_modbus = {0};
 static Timer g_timer_button_Loop = {0};
 extern uint8_t warmup_init_flag;
 
+
+
 // 通道波动信息
 channel_fluctuation_t channel_fluctuation[CHANNEL_NUM];// 通道波动信息
 
@@ -315,6 +317,8 @@ void APP_USER_Init(void)
 
     // 通道波动信息初始化
     memset(channel_fluctuation, 0, sizeof(channel_fluctuation));
+	
+	  mode_switch = 1;
 
 }
 
@@ -503,6 +507,15 @@ void APP_USER_button_Loop(void)
         g_total_meters = (uint32_t)(curr_pos_m * 1000.0f);
         s_total_distance_m_f = curr_pos_m;
         FLASH_WriteU32_WithCheck(FLASH_TOTAL_METERS, g_total_meters);
+			
+//			LOGT("标定完成: curr_pos_m=%.3f, g_total_meters=%lu, AD_upper=%lu, AD_lower=%lu, slope=%f, offset=%f\n",
+//      curr_pos_m,
+//      g_total_meters,
+//      GSS_device.position_signal_upper,
+//      GSS_device.position_signal_lower,
+//      GSS_device.position_slope,
+//      GSS_device.position_offset);
+			
 
         // 提示：响两声
         Relay_Beep_N_Times(2);
@@ -511,5 +524,9 @@ void APP_USER_button_Loop(void)
         first_press_tick = 0;
         one_min_switch_done = 0;
         cal_state = CAL_WAIT_FIRST;
+			
+			
+			
+			
     }
 }
